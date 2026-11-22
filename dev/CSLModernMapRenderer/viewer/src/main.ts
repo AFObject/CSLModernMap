@@ -1,7 +1,7 @@
 // 初始化 MapLibre 预览器并处理地图交互命令。
 import { i18n, setLanguage } from './i18n';
 import { spaceMixedText } from './text-spacing';
-import maplibregl, { type ExpressionSpecification, type Map as MapLibreMap, type MapGeoJSONFeature, type Marker } from 'maplibre-gl';
+import maplibregl, { type ExpressionSpecification, type Map as MapLibreMap, type MapGeoJSONFeature, type Marker, type PointLike } from 'maplibre-gl';
 import {clipLine} from 'maplibre-gl/src/symbol/clip_line';
 import './style.css';
 import {candidate_points, group_candidates, obstacle_score, placement_reason, rank_candidates,
@@ -213,6 +213,7 @@ let transitStationDisplayFeatures: any[] = [];
 const registeredIcons = new Set<string>();
 let labelLayoutKey = '';
 let labelLayoutTime = -Infinity, labelTimer = 0, labelDirty = false;
+let retriedLabelQuery = false;
 let hiddenPoiIcons = new Map<string, {source: string; id: number | string}>();
 const poiIconPaint = {'icon-opacity': ['case', ['boolean', ['feature-state', 'poiHidden'], false], 0, 1] as ExpressionSpecification,
   'icon-opacity-transition': {duration: 0}};
@@ -263,6 +264,17 @@ function reportError(error: unknown, identity?: {sceneId?: string; revision?: nu
   const message = error instanceof Error ? error.message : String(error);
   setError(i18n.t("main_reportError_8a023d6da8", { p0: message }));
   postEvent('renderError', { message, fatal, details: error instanceof Error ? error.stack : message, ...identity });
+}
+function queryMapFeatures(layers: string[], geometry?: PointLike | [PointLike, PointLike]): MapGeoJSONFeature[] | null {
+  if (!layers.length) return [];
+  try {
+    return geometry ? map.queryRenderedFeatures(geometry, {layers}) : map.queryRenderedFeatures({layers});
+  } catch (error) {
+    // MapLibre #7752: a symbol can outlive its source-layer dictionary during a tile reload.
+    if (error instanceof Error && /^Out of bounds\. Index requested n=\d+ can't be >= this\._numberToString\.length 0$/.test(error.message)
+        && error.stack?.includes('lookupSymbolFeatures')) return null;
+    throw error;
+  }
 }
 const map: MapLibreMap = new maplibregl.Map({ container: 'map', style: { version: 8, sources: {},
   layers: [{ id: 'background', type: 'background', paint: { 'background-color': '#eef1f4' } }] },
@@ -1511,7 +1523,7 @@ const selectableObjects: Record<string, { objectType: string; styleLayer: string
 function navigationPlaceAt(point: {x: number; y: number}): Endpoint['place'] {
   const layers = ['pois', 'transit-pois', BUILDINGS_3D, 'buildings', 'poi-area'].filter(id => map.getLayer(id));
   if (!layers.length) return undefined;
-  const features = map.queryRenderedFeatures([point.x, point.y], {layers}).filter(feature => !feature.state?.poiHidden);
+  const features = (queryMapFeatures(layers, [point.x, point.y]) ?? []).filter(feature => !feature.state?.poiHidden);
   const feature = features.find(f => f.properties?.buildingId != null && Number(f.properties.buildingId) > 0)
     ?? features.find(f => f.layer.id === 'buildings');
   if (!feature) return undefined;
@@ -1530,14 +1542,14 @@ function transitLineAt(point: {x: number; y: number}, radius = 0): string | null
   if (!map.getLayer(layer) || map.getLayoutProperty(layer, 'visibility') === 'none') return null;
   const layers = [layer];
   const [x, y] = [point.x, point.y];
-  const hit = map.queryRenderedFeatures(radius ? [[x - radius, y - radius], [x + radius, y + radius]] : [x, y], {layers})[0];
+  const hit = queryMapFeatures(layers, radius ? [[x - radius, y - radius], [x + radius, y + radius]] : [x, y])?.[0];
   return hit?.properties.lineId == null ? null : String(hit.properties.lineId);
 }
 function featureAt(point: {x: number; y: number}): any | null {
   const layers = selectableLayerIds();
   const radius = 5;
   const left = point.x-radius, right = point.x+radius, top = point.y-radius, bottom = point.y+radius;
-  const features = layers.length ? map.queryRenderedFeatures([[left, top], [right, bottom]], {layers}) : [];
+  const features = queryMapFeatures(layers, [[left, top], [right, bottom]]) ?? [];
   const unique = new Map<string, any>();
   for (const feature of features) {
     if (feature.state?.poiHidden) continue;
@@ -1924,6 +1936,7 @@ async function loadSceneFonts(manifest: SceneManifest, base: string): Promise<vo
 }
 function cancelLabelLayout(): void {
   window.clearTimeout(labelTimer); labelTimer = 0; labelDirty = false; labelLayoutTime = -Infinity;
+  retriedLabelQuery = false;
 }
 function scheduleLabels(): void {
   if (artworkView.active) return;
@@ -2079,9 +2092,9 @@ function openStationDetails(stationId?: string, point?: {x: number; y: number}):
   let station = stationId ? stations.find(candidate => candidate.id === stationId) : undefined;
   if (!station && point) {
     const layerIds = ['rail-station-body', 'transit-pois', 'tv-poi'].filter(id => map.getLayer(id));
-    const hit = layerIds.length ? map.queryRenderedFeatures([point.x, point.y], {layers: layerIds})
-      .find(feature => !feature.state?.poiHidden && (feature.layer.id === 'rail-station-body'
-        || feature.properties.sourceKind === 'stop')) : undefined;
+    const hit = queryMapFeatures(layerIds, [point.x, point.y])
+      ?.find(feature => !feature.state?.poiHidden && (feature.layer.id === 'rail-station-body'
+        || feature.properties.sourceKind === 'stop'));
     if (hit) station = stations.find(candidate => candidate.id === hit.properties.stationId
       || (hit.properties.sourceKind === 'stop' && candidate.stopIds.includes(Number(hit.properties.sourceId))));
     if (!station && transitBasemap()) {
@@ -2136,7 +2149,7 @@ function openMapPlaceAt(point: maplibregl.Point): boolean {
   if (artworkView.active || !navigation.canInspectPlaces) return false;
   const layers = ['pois', 'transit-pois', 'tv-poi', BUILDINGS_3D, 'buildings'].filter(id => map.getLayer(id));
   if (!layers.length) return false;
-  const feature = map.queryRenderedFeatures(point, {layers}).find(hit => !hit.state?.poiHidden);
+  const feature = queryMapFeatures(layers, point)?.find(hit => !hit.state?.poiHidden);
   return feature ? openMapPlace(feature, point) : false;
 }
 
@@ -2241,7 +2254,15 @@ function layoutLabels(): void {
   const layers = navigation.guidingRoute || !localDetails ? [] : renderedLayers.filter(id => id && map.getLayer(id));
   // GeoJSON 更新及瓦片切换期间，符号放置结果可能仍引用上一版要素索引。
   if (layers.some(id => !map.isSourceLoaded((map.getLayer(id) as {source: string}).source))) return;
-  const rendered = layers.length ? map.queryRenderedFeatures({layers}) : [];
+  const rendered = queryMapFeatures(layers);
+  if (rendered === null) {
+    if (!retriedLabelQuery) {
+      retriedLabelQuery = true;
+      scheduleLabels();
+    }
+    return;
+  }
+  retriedLabelQuery = false;
   const seen = new Set<string>();
   const icons = rendered.filter(f => {
     const id = `${f.source}:${f.id}`;
