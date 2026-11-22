@@ -791,7 +791,13 @@ def load_document(
 
 def _load_document(path, progress, *, validate):
     source = Path(path)
-    if source.name.casefold().endswith(CMM_FILE_SUFFIXES) or source.suffix.lower() == ".json":
+    suffix = source.suffix.casefold()
+    is_cmm = source.name.casefold().endswith(CMM_FILE_SUFFIXES) or suffix == ".json"
+    if not is_cmm and suffix == ".gz":
+        with gzip.open(source, "rb") as compressed:
+            header = compressed.read(4096).removeprefix(b"\xef\xbb\xbf").lstrip()
+        is_cmm = header.startswith(b"{")
+    if is_cmm:
         if progress is not None:
             progress(0.1, tr("gui.progress.load.document"))
         try:
