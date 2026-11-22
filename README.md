@@ -14,6 +14,26 @@ Windows 查看器使用 WinUI，支持 `.cmm`、`.cmm.gz` 及历史 `.mmap`、`.
 
 本项目包含由 OpenAI Codex 辅助生成的代码。
 
+### 离线地图改进
+
+本分支重新设计了离线网页的底图、地图控件和随缩放变化的站点标注。公共交通寻路按车型、停站、候车和步行估算用时，并通过时间轴展示乘车和换乘过程。新增站点与线路详情，可查看停靠线路、经停站和站间距离，也可直接从站点发起导航。
+
+#### 公共交通概览
+
+![Aurelia Bay 公共交通概览](docs/screenshots/transit-overview.png)
+
+#### 公共交通导航
+
+![公共交通路线高亮与换乘时间轴](docs/screenshots/transit-directions.png)
+
+#### 线路详情
+
+![Merewood Line 的经停站、站间距离和预计用时](docs/screenshots/transit-line-details.png)
+
+#### 站点详情
+
+![中央火车站的站体、停靠线路和导航入口](docs/screenshots/transit-station-details.png)
+
 ### 开始使用
 
 1. 安装并启用对应游戏的 CSLModernMap Mod，载入城市。
