@@ -136,6 +136,7 @@ export class NavigationControl {
   private readonly transitSummary = document.createElement('h2');
   private readonly backButton: HTMLButtonElement;
   private readonly closeButton: HTMLButtonElement;
+  private readonly clearButton: HTMLButtonElement;
   private readonly fitButton: HTMLButtonElement;
   private detailsOpen = false;
   private inspectedPlace: PlaceInspection | null = null;
@@ -207,10 +208,12 @@ export class NavigationControl {
     this.backButton.dataset.navigationLabel = 'timelineBack';
     this.fitButton = this.button('fit', () => this.fitRoute());
     this.fitButton.classList.add('navigation-fit'); this.fitButton.dataset.navigationLabel = 'fit';
+    this.clearButton = this.button('clearRoute', () => this.clearRoute());
+    this.clearButton.className = 'navigation-clear'; this.clearButton.dataset.navigationLabel = 'clearRoute';
     this.transitSummary.className = 'navigation-transit-summary';
     const headingActions = document.createElement('div');
     headingActions.className = 'navigation-heading-actions';
-    headingActions.append(this.fitButton, this.backButton, this.closeButton);
+    headingActions.append(this.fitButton, this.clearButton, this.backButton, this.closeButton);
     heading.append(title, this.transitSummary, headingActions);
     this.modes.className = 'navigation-modes';
     for (const mode of ['drivingMode', 'transit'] as const) {
@@ -224,6 +227,7 @@ export class NavigationControl {
     swap.dataset.navigationLabel = 'swap'; swap.classList.add('navigation-swap');
     endpointButtons.append(this.startButton, this.endButton, swap);
     this.cancelButton = this.button('cancel', () => this.cancel()); this.cancelButton.hidden = true;
+    this.cancelButton.classList.add('navigation-cancel'); this.cancelButton.dataset.navigationLabel = 'cancel';
     this.retryButton = this.button('retry', () => { this.cancel(); void this.query(); }); this.retryButton.hidden = true;
     this.coordinates.type = 'text'; this.coordinates.setAttribute('aria-label', text('coordinate'));
     const form = document.createElement('form'); form.className = 'navigation-actions';
@@ -238,6 +242,7 @@ export class NavigationControl {
     });
     const coordinateTitle = document.createElement('summary');
     coordinateTitle.dataset.navigationKey = 'coordinateSelection'; this.coordinateDetails.append(coordinateTitle, form);
+    this.coordinateDetails.className = 'navigation-coordinate-entry';
     this.coordinateDetails.hidden = true;
     this.message.setAttribute('role', 'status'); this.message.setAttribute('aria-live', 'polite');
     this.message.className = 'navigation-status';
@@ -261,11 +266,10 @@ export class NavigationControl {
     this.resultActions.className = 'navigation-actions'; this.resultActions.hidden = true;
     this.simulation = new NavigationSimulation(map, this.root, meters => this.drawProgress(meters), preview3d);
     this.resultActions.append(this.simulation.startButton);
-    const statusActions = document.createElement('div'); statusActions.className = 'navigation-actions';
-    statusActions.append(this.cancelButton, this.retryButton);
-    const clear = this.button('clearRoute', () => this.clearRoute()); clear.className = 'navigation-clear';
-    this.panel.append(heading, endpointButtons, this.modes, this.placeResults, this.morePlaces, this.coordinateDetails, this.message, statusActions,
-      this.summary, this.transitDetails, this.stationDetails, this.resultActions, this.routeDetails, clear);
+    const setupActions = document.createElement('div'); setupActions.className = 'navigation-setup-actions';
+    setupActions.append(this.cancelButton, this.retryButton);
+    this.panel.append(heading, endpointButtons, this.modes, this.placeResults, this.morePlaces, this.message, this.coordinateDetails, setupActions,
+      this.summary, this.transitDetails, this.stationDetails, this.resultActions, this.routeDetails);
     for (const name of ['click', 'dblclick', 'pointerdown', 'touchstart'] as const)
       this.panel.addEventListener(name, event => event.stopPropagation());
     this.root.append(toggle, this.panel); document.body.append(this.root);
@@ -312,7 +316,7 @@ export class NavigationControl {
     input.addEventListener('input', () => {
       this.operation++; this.client?.cancel(); this.busy = false; this.picking = key;
       this.selectedLeg = null; this.detailsOpen = false; this.updateDetailView();
-      this.cancelButton.hidden = false; this.retryButton.hidden = true; this.coordinateDetails.hidden = false;
+      this.cancelButton.hidden = true; this.retryButton.hidden = true; this.coordinateDetails.hidden = false;
       this.startButton.setAttribute('aria-pressed', String(key === 'origin')); this.endButton.setAttribute('aria-pressed', String(key === 'destination'));
       this.map.getCanvas().style.cursor = 'crosshair';
       this.renderCards();
@@ -353,12 +357,12 @@ export class NavigationControl {
   private searchPlaces(key: 'origin' | 'destination', limit = 8): void {
     const query = this.placeInputs[key].value;
     this.closePlaces();
-    if (!query.trim()) { this.message.textContent = text(key === 'origin' ? 'pickOrigin' : 'pickDestination'); return; }
+    if (!query.trim()) { this.message.replaceChildren(); return; }
     const matches = searchGroups(this.searchCandidates, query).flatMap(group => group.items);
     this.placeLimit = limit; this.placeMatches = matches.slice(0, limit); this.morePlaces.hidden = matches.length <= limit;
     this.placeResults.hidden = !this.placeMatches.length;
     this.placeInputs[key].setAttribute('aria-expanded', String(!this.placeResults.hidden));
-    this.message.textContent = text(this.placeMatches.length ? key === 'origin' ? 'pickOrigin' : 'pickDestination' : 'noPlaces');
+    this.message.textContent = this.placeMatches.length ? '' : text('noPlaces');
     this.placeMatches.forEach((candidate, index) => {
       const option = document.createElement('div'); option.setAttribute('role', 'option'); option.setAttribute('aria-selected', 'false');
       option.id = `navigation-place-${index}`;
@@ -479,7 +483,7 @@ export class NavigationControl {
     this.root.querySelector('button')?.setAttribute('aria-expanded', String(!this.panel.hidden));
     this.draw();
     this.displayResult();
-    if (this.panel.hidden) this.message.textContent = text('ready');
+    if (this.panel.hidden) this.message.replaceChildren();
   }
 
   private translate(): void {
@@ -496,9 +500,11 @@ export class NavigationControl {
     this.fitButton.title = text('fit');
     this.backButton.title = text('timelineBack');
     this.closeButton.title = text('close');
+    this.clearButton.title = text('clearRoute');
+    this.cancelButton.title = text('cancel');
     this.coordinates.placeholder = text('coordinate'); this.coordinates.setAttribute('aria-label', text('coordinate'));
     this.renderEndpoints(); this.renderCards(); this.displayResult();
-    if (!this.result && !this.inspectedPlace) this.message.textContent = text(this.busy ? 'computing' : this.picking === 'origin' ? 'pickOrigin' : this.picking ? 'pickDestination' : 'ready');
+    if (!this.result && !this.inspectedPlace) this.message.textContent = this.busy ? text('computing') : '';
     if (this.picking && document.activeElement === this.placeInputs[this.picking] && !this.composing) this.searchPlaces(this.picking);
   }
 
@@ -568,7 +574,7 @@ export class NavigationControl {
       if (value) marker.setLngLat(geo(value.position));
     }
     this.map.getCanvas().style.cursor = ''; this.renderEndpoints(); this.renderCards(); this.displayResult();
-    if (!this.result) this.message.textContent = text('ready');
+    if (!this.result) this.message.replaceChildren();
   }
 
   private begin(endpoint: 'origin' | 'destination'): void {
@@ -581,8 +587,8 @@ export class NavigationControl {
     this.root.querySelector('button')?.setAttribute('aria-expanded', 'true');
     this.startButton.setAttribute('aria-pressed', String(endpoint === 'origin'));
     this.endButton.setAttribute('aria-pressed', String(endpoint === 'destination'));
-    this.message.textContent = text(endpoint === 'origin' ? 'pickOrigin' : 'pickDestination'); this.map.getCanvas().style.cursor = 'crosshair';
-    this.cancelButton.hidden = false; this.retryButton.hidden = true;
+    this.message.replaceChildren(); this.map.getCanvas().style.cursor = 'crosshair';
+    this.cancelButton.hidden = true; this.retryButton.hidden = true;
     this.coordinateDetails.hidden = false;
   }
 
@@ -663,7 +669,7 @@ export class NavigationControl {
 
   private fail(error: unknown, operation: number): void {
     if (operation !== this.operation || (error instanceof RoutingError && error.code === 'CANCELLED')) return;
-    this.busy = false; this.cancelButton.hidden = !this.picking;
+    this.busy = false; this.cancelButton.hidden = true;
     this.retryButton.hidden = !this.origin || !this.destination || this.result !== null;
     this.renderCards();
     this.message.textContent = text(error instanceof RoutingError ? error.code : 'WORKER_FAILED');
@@ -737,7 +743,7 @@ export class NavigationControl {
     for (const [key, button] of [['origin', this.startButton], ['destination', this.endButton]] as const) {
       const endpoint = this[key];
       const name = endpoint ? endpoint.place?.name || endpoint.snap.name || text('unnamed') : '';
-      const input = this.placeInputs[key]; input.placeholder = text('placePlaceholder');
+      const input = this.placeInputs[key]; input.placeholder = text(key);
       if (this.picking !== key || document.activeElement !== input) input.value = name;
       button.setAttribute('aria-pressed', String(this.picking === key));
     }
@@ -876,6 +882,7 @@ export class NavigationControl {
     this.backButton.hidden = this.transitDetails.hidden || Boolean(this.inspectedLine && !this.inspectedPlace);
     this.closeButton.hidden = !this.backButton.hidden;
     this.fitButton.hidden = !this.result;
+    this.clearButton.hidden = showingDetails || (!this.origin && !this.destination);
     this.panel.classList.toggle('navigation-details-open', showingDetails);
     this.panel.classList.toggle('navigation-station-open', !this.stationDetails.hidden);
   }

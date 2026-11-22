@@ -135,8 +135,9 @@ export class PreviewControls {
     this.layerPanel.setAttribute('role', 'region'); this.layerTitle.id = 'preview-layer-title';
     this.layerPanel.setAttribute('aria-labelledby', this.layerTitle.id);
     const layerHeading = document.createElement('div'); layerHeading.className = 'preview-layer-heading';
+    const layerContent = document.createElement('div'); layerContent.className = 'preview-layer-content';
     this.layerClose.type = 'button'; this.layerClose.onclick = () => this.closeLayers(true);
-    layerHeading.append(this.layerTitle, this.layerClose); this.layerPanel.append(layerHeading);
+    layerHeading.append(this.layerTitle, this.layerClose); this.layerPanel.append(layerHeading, layerContent);
     this.layerToggle.type = 'button'; this.layerToggle.setAttribute('aria-controls', this.layerPanel.id);
     this.layerToggle.setAttribute('aria-expanded', 'false');
     this.layerToggle.onclick = () => {
@@ -157,7 +158,7 @@ export class PreviewControls {
     for (const group of layerGroups) {
       const section = document.createElement('section'), heading = document.createElement('h3');
       section.className = 'preview-layer-group'; heading.id = `preview-layer-${group.title}`;
-      section.setAttribute('aria-labelledby', heading.id); section.append(heading); this.layerPanel.append(section);
+      section.setAttribute('aria-labelledby', heading.id); section.append(heading); layerContent.append(section);
       this.sections.push({section, heading, key: group.title});
       for (const [key, icon] of group.items) {
         const row = document.createElement('label'), label = document.createElement('span'), input = document.createElement('input');
