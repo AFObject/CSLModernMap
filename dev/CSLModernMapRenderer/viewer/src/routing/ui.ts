@@ -34,8 +34,8 @@ const text = (key: string, values: Record<string, number | string> = {}): string
   spaceMixedText(i18n.t(`navigation_${key}`, values));
 const actionIcons: Record<string, ControlIcon> = {
   title: 'route', close: 'x', drivingMode: 'car', transit: 'bus', start: 'map-pin', end: 'flag',
-  swap: 'arrows-up-down', cancel: 'x', retry: 'refresh', useCoordinate: 'check', fit: 'zoom-scan',
-  clearRoute: 'trash', timelineBack: 'arrow-back-up',
+  cancel: 'x', retry: 'refresh', useCoordinate: 'check', fit: 'zoom-scan',
+  timelineBack: 'arrow-back-up',
 };
 const lineIds = ['navigation-casing', 'navigation-road', 'navigation-access', 'navigation-building', 'navigation-building-outline', 'navigation-transit', 'navigation-walk', 'navigation-schematic', 'navigation-stops', 'navigation-turn-fill', 'navigation-turn-outline', 'navigation-alternative-casing', 'navigation-alternative-road'];
 const profiles: RoutingProfile[] = ['car-balanced', 'car-shortest'];
@@ -104,7 +104,6 @@ export class NavigationControl {
   private immersive = false;
   private readonly message = document.createElement('div');
   private readonly summary = document.createElement('div');
-  private readonly steps = document.createElement('ol');
   private readonly coordinates = document.createElement('input');
   private readonly modes = document.createElement('div');
   private profile: RoutingProfile = 'car-balanced';
@@ -114,9 +113,7 @@ export class NavigationControl {
 
   private readonly routeErrors = new Map<RoutingProfile, string>();
   private busy = false;
-  private readonly routeDetails = document.createElement('details');
   private readonly coordinateDetails = document.createElement('details');
-  private readonly resultActions = document.createElement('div');
   private readonly cancelButton: HTMLButtonElement;
   private readonly retryButton: HTMLButtonElement;
   private readonly startButton: HTMLElement;
@@ -135,8 +132,6 @@ export class NavigationControl {
   private readonly transitSteps = document.createElement('ol');
   private readonly transitSummary = document.createElement('h2');
   private readonly backButton: HTMLButtonElement;
-  private readonly closeButton: HTMLButtonElement;
-  private readonly clearButton: HTMLButtonElement;
   private readonly fitButton: HTMLButtonElement;
   private detailsOpen = false;
   private inspectedPlace: PlaceInspection | null = null;
@@ -162,8 +157,6 @@ export class NavigationControl {
   private marks: maplibregl.Marker[] = [];
   private routeStopLabels: maplibregl.Marker[] = [];
   private popup: maplibregl.Popup | null = null;
-  private routePopup: maplibregl.Popup | null = null;
-  private routeCard: HTMLElement | null = null;
   private longPress = 0;
   private previewTimer = 0;
   private readonly languageChanged = () => this.translate();
@@ -187,33 +180,24 @@ export class NavigationControl {
     this.root.className = 'navigation-control'; this.root.hidden = true;
     const toggle = this.button('title', () => {
       if (this.simulation.active) { this.simulation.stop(); return; }
-      if (this.inspectedLine || this.inspectedPlace) { this.closeInspection(); return; }
-      this.panel.hidden = !this.panel.hidden; this.popup?.remove();
-      if (!this.panel.hidden) { this.panelOpened(); this.onNavigationOpened(); }
-      if (this.panel.hidden) this.cancel(); else { this.planningStarted(); this.activateMissingEndpoint(); }
+      if (!this.panel.hidden) { this.hidePanel(); return; }
+      this.panel.hidden = false; this.popup?.remove();
+      this.panelOpened(); this.onNavigationOpened(); this.planningStarted(); this.activateMissingEndpoint();
     });
     toggle.setAttribute('aria-expanded', 'false');
     toggle.addEventListener('click', () => toggle.setAttribute('aria-expanded', String(!this.panel.hidden)));
     this.panel.className = 'navigation-panel'; this.panel.hidden = true;
     const heading = document.createElement('div'); heading.className = 'navigation-heading';
     const title = document.createElement('h2'); title.dataset.navigationKey = 'title';
-    this.closeButton = this.button('close', () => {
-      if (this.inspectedLine || this.inspectedPlace) this.closeInspection(); else this.hidePanel(true);
-      toggle.focus();
-    });
-    this.closeButton.classList.add('navigation-close');
-    this.closeButton.dataset.navigationLabel = 'close';
     this.backButton = this.button('timelineBack', () => this.showTransitDetails(false));
     this.backButton.classList.add('navigation-close');
     this.backButton.dataset.navigationLabel = 'timelineBack';
     this.fitButton = this.button('fit', () => this.fitRoute());
     this.fitButton.classList.add('navigation-fit'); this.fitButton.dataset.navigationLabel = 'fit';
-    this.clearButton = this.button('clearRoute', () => this.clearRoute());
-    this.clearButton.className = 'navigation-clear'; this.clearButton.dataset.navigationLabel = 'clearRoute';
     this.transitSummary.className = 'navigation-transit-summary';
     const headingActions = document.createElement('div');
     headingActions.className = 'navigation-heading-actions';
-    headingActions.append(this.fitButton, this.clearButton, this.backButton, this.closeButton);
+    headingActions.append(this.fitButton, this.backButton);
     heading.append(title, this.transitSummary, headingActions);
     this.modes.className = 'navigation-modes';
     for (const mode of ['drivingMode', 'transit'] as const) {
@@ -225,13 +209,18 @@ export class NavigationControl {
     this.endButton = this.endpointInput('destination');
     const swap = this.button('swap', () => void this.rematchEndpoints(this.profile, [this.destination, this.origin]));
     swap.dataset.navigationLabel = 'swap'; swap.classList.add('navigation-swap');
+    const swapIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    swapIcon.setAttribute('viewBox', '0 0 24 24'); swapIcon.setAttribute('aria-hidden', 'true');
+    swapIcon.innerHTML = '<path d="M6 17V8a2 2 0 0 1 2-2h8m-3-3 3 3-3 3m5-2v9a2 2 0 0 1-2 2H8m3-3-3 3 3 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>';
+    swap.replaceChildren(swapIcon); delete swap.dataset.navigationKey;
     endpointButtons.append(this.startButton, this.endButton, swap);
     this.cancelButton = this.button('cancel', () => this.cancel()); this.cancelButton.hidden = true;
     this.cancelButton.classList.add('navigation-cancel'); this.cancelButton.dataset.navigationLabel = 'cancel';
     this.retryButton = this.button('retry', () => { this.cancel(); void this.query(); }); this.retryButton.hidden = true;
     this.coordinates.type = 'text'; this.coordinates.setAttribute('aria-label', text('coordinate'));
-    const form = document.createElement('form'); form.className = 'navigation-actions';
+    const form = document.createElement('form'); form.className = 'navigation-actions navigation-coordinate-form';
     const submit = this.button('useCoordinate', () => {}); submit.type = 'submit';
+    submit.className = 'navigation-coordinate-submit'; submit.dataset.navigationLabel = 'useCoordinate';
     form.append(this.coordinates, submit);
     form.addEventListener('submit', event => {
       event.preventDefault();
@@ -256,20 +245,16 @@ export class NavigationControl {
     });
     this.morePlaces.className = 'navigation-more-places'; this.morePlaces.hidden = true;
     this.summary.className = 'navigation-routes'; this.summary.setAttribute('aria-label', text('driving'));
-    const stepsTitle = document.createElement('summary'); stepsTitle.dataset.navigationKey = 'routeDetails';
-    this.routeDetails.className = 'navigation-steps'; this.routeDetails.append(stepsTitle, this.steps); this.routeDetails.hidden = true;
     this.transitDetails.className = 'navigation-transit-details'; this.transitDetails.hidden = true;
     this.transitDetails.tabIndex = -1;
     this.transitSteps.className = 'navigation-itinerary';
     this.transitDetails.append(this.transitSteps);
     this.stationDetails.className = 'navigation-station-lines'; this.stationDetails.hidden = true;
-    this.resultActions.className = 'navigation-actions'; this.resultActions.hidden = true;
     this.simulation = new NavigationSimulation(map, this.root, meters => this.drawProgress(meters), preview3d);
-    this.resultActions.append(this.simulation.startButton);
     const setupActions = document.createElement('div'); setupActions.className = 'navigation-setup-actions';
     setupActions.append(this.cancelButton, this.retryButton);
     this.panel.append(heading, endpointButtons, this.modes, this.placeResults, this.morePlaces, this.message, this.coordinateDetails, setupActions,
-      this.summary, this.transitDetails, this.stationDetails, this.resultActions, this.routeDetails);
+      this.summary, this.transitDetails, this.stationDetails);
     for (const name of ['click', 'dblclick', 'pointerdown', 'touchstart'] as const)
       this.panel.addEventListener(name, event => event.stopPropagation());
     this.root.append(toggle, this.panel); document.body.append(this.root);
@@ -409,11 +394,11 @@ export class NavigationControl {
     container.append(this.root); this.panelOpened = opened;
   }
 
-  hidePanel(exitNavigation = false): void {
+  hidePanel(): void {
+    if (this.panel.hidden) return;
     if (this.inspectedLine || this.inspectedPlace) this.closeInspection();
     this.panel.hidden = true;
-    if (exitNavigation) this.clearRoute();
-    else this.cancel();
+    this.clearRoute();
     this.root.querySelector('button')?.setAttribute('aria-expanded', 'false');
   }
 
@@ -499,8 +484,6 @@ export class NavigationControl {
     for (const element of this.root.querySelectorAll<HTMLElement>('[data-navigation-label]')) element.setAttribute('aria-label', text(element.dataset.navigationLabel!));
     this.fitButton.title = text('fit');
     this.backButton.title = text('timelineBack');
-    this.closeButton.title = text('close');
-    this.clearButton.title = text('clearRoute');
     this.cancelButton.title = text('cancel');
     this.coordinates.placeholder = text('coordinate'); this.coordinates.setAttribute('aria-label', text('coordinate'));
     this.renderEndpoints(); this.renderCards(); this.displayResult();
@@ -546,7 +529,7 @@ export class NavigationControl {
     this.root.querySelector('button')?.setAttribute('aria-expanded', 'false');
     this.profile = 'car-balanced';
     this.displayResult();
-    for (const details of [this.coordinateDetails, this.routeDetails]) details.open = false;
+    this.coordinateDetails.open = false;
     for (const id of lineIds) if (this.map.getLayer(id)) this.map.removeLayer(id);
     if (this.map.getSource('navigation')) this.map.removeSource('navigation');
   }
@@ -581,7 +564,6 @@ export class NavigationControl {
     this.simulation.stop();
     this.panelOpened();
     this.cancel(); this.panel.hidden = false; this.picking = endpoint;
-    this.routePopup?.remove();
     this.selectedLeg = null; this.detailsOpen = false; this.updateDetailView();
     this.planningStarted();
     this.root.querySelector('button')?.setAttribute('aria-expanded', 'true');
@@ -735,7 +717,7 @@ export class NavigationControl {
     this.routes.clear(); this.routeErrors.clear(); this.busy = false;
     this.clearRouteStopLabels();
     this.onRouteFocus(false);
-    this.retryButton.hidden = true; this.routeDetails.open = false;
+    this.retryButton.hidden = true;
     this.renderEndpoints(); this.renderCards(); this.displayResult();
   }
 
@@ -750,17 +732,12 @@ export class NavigationControl {
   }
 
   private renderCards(): void {
-    this.routeCard = null; this.routePopup?.remove();
     this.summary.setAttribute('aria-label', text(this.profile === 'transit' ? 'transit' : 'driving'));
     for (const button of this.modes.querySelectorAll<HTMLButtonElement>('button'))
       button.setAttribute('aria-pressed', String((button.dataset.mode === 'transit') === (this.profile === 'transit')));
     this.summary.replaceChildren();
     if (this.profile === 'transit' && !this.busy && !this.transitRoutes.length) return;
     if (!this.busy && !this.routes.size && !this.transitRoutes.length && !this.routeErrors.size) return;
-    if (this.profile !== 'transit') {
-      const heading = document.createElement('p'); heading.className = 'navigation-section-title'; heading.textContent = text('driving');
-      this.summary.append(heading);
-    }
     const entries: Array<{profile: RoutingProfile; result?: RouteResult; candidate?: TransitCandidate}> = this.profile === 'transit'
       ? this.transitRoutes.length
         ? this.transitRoutes.map(candidate => ({profile: 'transit', result: candidate, candidate}))
@@ -769,7 +746,7 @@ export class NavigationControl {
     for (const {profile, result, candidate} of entries) {
       if (profile === 'car-balanced' && this.client && this.client.data.costModel?.id !== 'car-balanced-v1') continue;
       const card = document.createElement('button'); card.type = 'button';
-      card.className = profile === 'transit' ? 'navigation-route-card' : 'navigation-route-option';
+      card.className = 'navigation-route-card';
       card.classList.toggle('transit', profile === 'transit');
       card.dataset.profile = profile;
       if (candidate) card.dataset.candidateId = candidate.candidateId;
@@ -777,6 +754,7 @@ export class NavigationControl {
       card.disabled = !result || this.busy;
       const label = document.createElement('span'); label.className = 'navigation-route-label'; label.textContent = profileLabel(profile);
       label.prepend(controlIcon(profile === 'transit' ? 'bus' : 'car'));
+      label.hidden = Boolean(result);
       const duration = document.createElement('span'); duration.className = 'navigation-duration';
       duration.textContent = this.busy ? text('computing') : result && profile !== 'transit'
         ? durationLabel(result.durationSeconds!) : text(this.routeErrors.get(profile) ?? 'NO_PATH');
@@ -787,13 +765,13 @@ export class NavigationControl {
         const distance = document.createElement('span'); distance.className = 'navigation-distance';
         distance.textContent = profile==='transit'
           ? `${(result.distanceM/1000).toFixed(2)} km · ${Math.max(0,result.boardings!-1)} ${text('transfers')} · ${text('walk')} ${Math.round(result.walkingDistanceM!)} m`
-          : distanceLabel(result.distanceM);
+          : `${distanceLabel(result.distanceM)} · ${profileLabel(profile)}`;
         const roads = profile === 'transit' ? result.legs?.filter(leg => leg.mode === 'ride').map(leg => leg.name || text('transit')) ?? [] : result.roadNames;
         const via = document.createElement('span'); via.className = 'navigation-via';
         via.textContent = roads.length ? spaceMixedText(`${text('via')} ${roads.slice(0, 2).join(' · ')}${roads.length > 2 ? '…' : ''}`) : text(profile === 'transit' ? 'walkingOnly' : 'unnamed');
         card.append(distance, via);
         if (profile === 'transit') {
-          label.hidden = true; via.replaceChildren();
+          via.replaceChildren();
           for (const [index, leg] of (result.legs ?? []).entries()) {
             if (index) via.append(this.transferArrow());
             via.append(leg.mode === 'ride' ? lineCapsule(leg.name || text('transit'), leg.color) : walkCapsule(leg.walkKind==='transfer' ? Math.max(100,leg.distanceM) : leg.distanceM));
@@ -815,16 +793,6 @@ export class NavigationControl {
           }
         }
       }
-      if (profile !== 'transit' && result && !this.busy) {
-        card.classList.add('navigation-route-card');
-        if (profile === this.profile) {
-          this.routeCard = document.createElement('div');
-          this.routeCard.className = 'navigation-map-card';
-          this.routeCard.dataset.routeProfile = profile;
-          this.routeCard.setAttribute('aria-label', text('routeDetails'));
-          this.routeCard.append(label.cloneNode(true), duration.cloneNode(true));
-        }
-      }
       card.addEventListener('click', () => {
         if (candidate) {
           this.selectTransitCandidate(candidate.candidateId);
@@ -834,36 +802,41 @@ export class NavigationControl {
         this.selectDrivingProfile(profile);
         this.summary.querySelector<HTMLButtonElement>(`[data-profile="${profile}"]`)?.focus();
       });
-      this.summary.append(card);
-      if (profile === 'transit' && result) {
+      const row = document.createElement('div'); row.className = 'navigation-choice';
+      row.append(card); this.summary.append(row);
+      if (result && !this.busy) {
+        const actions = document.createElement('div'); actions.className = 'navigation-choice-actions';
+        const select = () => {
+          if (candidate) this.selectTransitCandidate(candidate.candidateId);
+          else this.selectDrivingProfile(profile);
+        };
+        if (profile !== 'transit' && result.distanceM > 0) {
+          const label = i18n.t('simulation_start');
+          const simulate = profile === this.profile ? this.simulation.startButton : document.createElement('button');
+          if (simulate !== this.simulation.startButton) {
+            simulate.type = 'button'; simulate.className = 'navigation-simulate';
+            simulate.append(controlIcon('navigation'));
+            simulate.addEventListener('click', () => { select(); this.simulation.startButton.click(); });
+          }
+          simulate.title = label; simulate.setAttribute('aria-label', label);
+          actions.append(simulate);
+        }
         const details = this.button('routeDetails', () => {
-          this.selectTransitCandidate(candidate!.candidateId); this.showTransitDetails(true);
+          select(); this.showTransitDetails(true);
         });
-        details.dataset.candidateId = candidate!.candidateId;
-        details.setAttribute('aria-label', `${text('routeDetails')} · ${duration.textContent} · ${result.legs!.filter(leg => leg.mode === 'ride').map(leg => leg.name).join(' → ') || text('walkingOnly')}`);
+        if (candidate) details.dataset.candidateId = candidate.candidateId;
+        details.dataset.profile = profile;
+        details.setAttribute('aria-label', `${text('routeDetails')} · ${duration.textContent}`);
         details.className = 'navigation-open-details';
         details.title = text('routeDetails');
         const icon = document.createElementNS('http://www.w3.org/2000/svg','svg');
         icon.setAttribute('viewBox','0 0 24 24'); icon.setAttribute('aria-hidden','true');
         icon.innerHTML = '<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
         details.replaceChildren(icon);
-        const row = document.createElement('div'); row.className = 'navigation-choice';
-        card.replaceWith(row); row.append(card,details);
+        actions.append(details); row.append(actions);
       }
     }
-    this.updateRoutePopup();
     this.updateDetailView();
-  }
-
-  private updateRoutePopup(progress: number | null = this.progressMeters): void {
-    if (!this.routeCard || !this.result || this.picking || progress !== null) {
-      this.routePopup?.remove(); return;
-    }
-    this.routePopup ??= new maplibregl.Popup({closeButton: false, closeOnClick: false,
-      focusAfterOpen: false, anchor: 'bottom', offset: 14, maxWidth: '240px', className: 'navigation-route-popup'});
-    const points = this.result.geometry;
-    this.routePopup.setLngLat(geo(pointAt(points, cumulative(points), .5)))
-      .setDOMContent(this.routeCard).addTo(this.map);
   }
 
   private selectTransitCandidate(id: string): void {
@@ -874,15 +847,13 @@ export class NavigationControl {
   }
 
   private updateDetailView(): void {
-    this.transitDetails.hidden = !this.inspectedLine && (!this.detailsOpen || this.profile !== 'transit' || !this.result);
+    this.transitDetails.hidden = !this.inspectedLine && (!this.detailsOpen || !this.result);
     this.stationDetails.hidden = !this.inspectedPlace || Boolean(this.inspectedLine);
     const showingDetails = !this.transitDetails.hidden || !this.stationDetails.hidden;
     this.summary.hidden = showingDetails;
     this.transitSummary.hidden = !showingDetails;
     this.backButton.hidden = this.transitDetails.hidden || Boolean(this.inspectedLine && !this.inspectedPlace);
-    this.closeButton.hidden = !this.backButton.hidden;
     this.fitButton.hidden = !this.result;
-    this.clearButton.hidden = showingDetails || (!this.origin && !this.destination);
     this.panel.classList.toggle('navigation-details-open', showingDetails);
     this.panel.classList.toggle('navigation-station-open', !this.stationDetails.hidden);
   }
@@ -898,7 +869,8 @@ export class NavigationControl {
     if (open) { this.panel.scrollTop = 0; this.backButton.focus({preventScroll: true}); }
     else {
       this.panel.scrollTop = this.listScroll;
-      this.summary.querySelector<HTMLButtonElement>(`.navigation-open-details[data-candidate-id="${this.selectedCandidateId}"]`)?.focus({preventScroll: true});
+      const selector = this.profile === 'transit' ? `[data-candidate-id="${this.selectedCandidateId}"]` : `[data-profile="${this.profile}"]`;
+      this.summary.querySelector<HTMLButtonElement>(`.navigation-open-details${selector}`)?.focus({preventScroll: true});
     }
   }
 
@@ -918,11 +890,9 @@ export class NavigationControl {
   }
 
   private displayResult(): void {
-    this.steps.replaceChildren();
     this.transitSteps.replaceChildren();
-    this.resultActions.hidden = this.routeDetails.hidden = !this.result;
     const result = this.result;
-    this.routeDetails.hidden = !result || result.costProfile === 'transit';
+    this.transitSteps.classList.toggle('navigation-driving-itinerary', Boolean(result && result.costProfile !== 'transit'));
     this.updateDetailView();
     this.simulation.setRoute(result);
     if (!this.stationDetails.hidden && this.inspectedPlace) {
@@ -941,9 +911,16 @@ export class NavigationControl {
       this.renderTransitItinerary(result);
       return;
     }
+    if (!result) return;
+    const duration = document.createElement('span'), subtitle = document.createElement('span');
+    duration.className = 'navigation-transit-total';
+    subtitle.className = 'navigation-transit-subtitle';
+    duration.textContent = result.durationSeconds == null ? '' : durationLabel(result.durationSeconds);
+    subtitle.textContent = distanceLabel(result.distanceM);
+    this.transitSummary.replaceChildren(duration, subtitle);
     for (const step of result?.maneuvers ?? []) {
       const item = document.createElement('li'); item.textContent = step.kind === 'arrive' ? text('arrive') : `${text(step.kind)} ${step.roadName || text('unnamed')} · ${Math.round(step.distanceM)} m`;
-      this.steps.append(item);
+      this.transitSteps.append(item);
     }
   }
 
@@ -1368,7 +1345,6 @@ export class NavigationControl {
     if ((this.progressMeters === null) !== (meters === null)) {
       for (const id of ['navigation-alternative-casing', 'navigation-alternative-road'])
         if (this.map.getLayer(id)) this.map.setLayoutProperty(id, 'visibility', meters === null ? 'visible' : 'none');
-      this.updateRoutePopup(meters);
     }
     if (this.progressMeters === meters) return;
     this.progressMeters = meters;

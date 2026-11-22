@@ -1,11 +1,11 @@
 :root {
   --chrome-size: 40px; --chrome-radius: 15px; --chrome-control-radius: 11px;
-  --chrome-surface: #fbfcf9f5; --chrome-edge: #45566b19; --chrome-ink: #293747;
+  --chrome-surface: #fbfcf9; --chrome-edge: #45566b19; --chrome-ink: #293747;
   --chrome-hover: #4669890e; --chrome-selected: #2176c716; --chrome-accent: #0064bd;
   --chrome-shadow: 0 2px 12px #27395116;
 }
 html[data-ui-appearance="dark"] {
-  --chrome-surface: #282e38f5; --chrome-edge: #ffffff24; --chrome-ink: #f0f4fa;
+  --chrome-surface: #282e38; --chrome-edge: #ffffff24; --chrome-ink: #f0f4fa;
   --chrome-hover: #ffffff12; --chrome-selected: #7eb9ff24; --chrome-accent: #9acaff;
   --chrome-shadow: 0 2px 12px #0005;
 }
@@ -27,9 +27,9 @@ html[data-ui-appearance="dark"] :is(.preview-controls, .preview-guide, .preview-
 :is(.preview-controls, .preview-guide, .preview-view-actions) button:hover:not(:disabled) { background: var(--preview-hover); }
 :is(.preview-controls, .preview-guide, .preview-view-actions) :is(button, input):focus-visible { outline: 2px solid var(--preview-accent); outline-offset: 2px; }
 :is(.preview-controls, .preview-view-actions) button:disabled { opacity: .5; cursor: default; }
-.preview-search-row { position: absolute; left: 12px; right: 110px; top: 12px; z-index: 13; display: flex; gap: 6px; align-items: start; pointer-events: none; }
+.preview-search-row { position: absolute; left: 12px; top: 12px; width: min(320px, calc(100% - 76px)); z-index: 13; display: flex; gap: 6px; align-items: start; pointer-events: none; }
 .preview-search-row > * { pointer-events: auto; }
-.preview-search { width: 260px; min-width: 0; }
+.preview-search { flex: 1; min-width: 0; }
 .preview-search input { width: 100%; height: var(--chrome-size); padding: 0 12px; font: inherit; }
 .preview-search input::placeholder { color: var(--preview-secondary); }
 .preview-search-results, .preview-search-status, .preview-layer-panel {
@@ -50,7 +50,7 @@ html[data-ui-appearance="dark"] :is(.preview-controls, .preview-guide, .preview-
 .preview-search-heading:hover, .preview-search-more:hover, .preview-search-more[aria-selected="true"],
 .preview-search-group[aria-selected="true"] > .preview-search-heading { background: var(--preview-hover); }
 .preview-search-row .navigation-control { position: static; max-width: none; }
-.preview-search-row .navigation-panel { position: absolute; top: calc(100% + 6px); left: 0; margin-top: 0; width: 320px; max-width: calc(100vw - 24px); max-height: calc(100vh - 110px); }
+.preview-search-row .navigation-panel { position: absolute; top: calc(100% + 6px); left: 0; margin-top: 0; width: 100%; max-height: calc(100vh - 110px); }
 .preview-search-row:has(.navigation-simulation-active) .preview-search { display: none; }
 @media (min-width: 681px) {
   .preview-search-row .navigation-simulation-settings { position: absolute; top: 36px; left: 0; }
@@ -85,7 +85,7 @@ html[data-ui-appearance="dark"] :is(.preview-controls, .preview-guide, .preview-
 .preview-search input, .preview-search-results, .preview-search-status, .preview-layer-panel,
 .preview-search-row .navigation-control > button, .preview-layers > button {
   color: var(--chrome-ink); background: var(--chrome-surface); border: 1px solid var(--chrome-edge);
-  border-radius: var(--chrome-radius); box-shadow: var(--chrome-shadow); backdrop-filter: blur(10px);
+  border-radius: var(--chrome-radius); box-shadow: var(--chrome-shadow);
 }
 .preview-map-pill { display: grid; gap: 1px; padding: 2px; }
 .preview-camera-tools > .maplibregl-ctrl {
@@ -106,9 +106,11 @@ html[data-ui-appearance="dark"] :is(.preview-controls, .preview-guide, .preview-
 .preview-layers > button .preview-button-label { display: none; }
 .preview-view-actions .preview-icon, .preview-search-row .navigation-control > button .preview-icon,
 .preview-layers > button .preview-icon { width: 19px; height: 19px; flex-basis: 19px; }
-.preview-view-actions .preview-map-pill button:hover:not(:disabled),
+.preview-view-actions .preview-map-pill button:hover:not(:disabled) { background: var(--chrome-hover); }
 .preview-view-actions > button:hover:not(:disabled),
-.preview-search-row .navigation-control > button:hover, .preview-layers > button:hover { background: var(--chrome-hover); }
+.preview-search-row .navigation-control > button:hover, .preview-layers > button:hover {
+  background: color-mix(in srgb, var(--chrome-ink) 7%, var(--chrome-surface));
+}
 .preview-view-actions .preview-map-pill button[aria-pressed="true"],
 .preview-search-row .navigation-control > button[aria-expanded="true"],
 .preview-layers > button[aria-expanded="true"] { color: var(--chrome-accent); background: var(--chrome-selected); }
@@ -143,10 +145,10 @@ html[data-ui-appearance="dark"] .maplibregl-ctrl-icon { filter: invert(1); }
 .preview-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .road-warning { top: 58px; }
 @media (max-width: 520px) {
-  .preview-search-row { right: 64px; }
+  .preview-search-row { width: auto; right: 64px; }
   .preview-search { flex: 1; }
   .preview-search input { font-size: 16px; }
-  .preview-search-row .navigation-panel { position: fixed; top: auto; left: 8px; right: 8px; bottom: 86px; width: auto; max-width: none; max-height: 55vh; }
+  .preview-search-row .navigation-panel { position: fixed; top: auto; left: 12px; right: 64px; bottom: 86px; width: auto; max-width: none; max-height: 55vh; }
   .preview-guide-content { padding: 20px; }
 }
 @media (pointer: coarse) {

@@ -139,13 +139,6 @@ html, body, body *, body *::before, body *::after {
   line-height: 1.5; vertical-align: baseline;
 }
 
-.navigation-choice { position:relative; }
-.navigation-control .navigation-choice .navigation-route-card { padding:9px 42px 9px 12px; margin-bottom:5px; }
-.navigation-control .navigation-choice .navigation-open-details { position:absolute; top:5px; right:5px; display:grid; place-items:center; width:30px; height:30px; padding:5px; margin:0; background:transparent; border:0; border-radius:50%; }
-.navigation-open-details svg { width:18px; height:18px; }
-.navigation-open-details:hover { outline:1px solid currentColor; }
-
-.navigation-control .navigation-route-card.transit .navigation-duration {font-size:22px;font-weight:650;line-height:1.15}
 .navigation-line-capsule,.navigation-walk-capsule {border-radius:7px}
 .navigation-walk-capsule {display:inline-flex;align-items:center;gap:3px;padding:1px 6px;background:#eaebed;color:#454b52;font-size:inherit;line-height:1.5}
 .navigation-walk-capsule svg {width:14px;height:14px}
