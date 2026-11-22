@@ -41,6 +41,22 @@ Windows 查看器使用 WinUI，支持 `.cmm`、`.cmm.gz` 及历史 `.mmap`、`.
 
 ![中央火车站的站体、停靠线路和导航入口](docs/screenshots/transit-station-details.png)
 
+### macOS 离线地图生成器
+
+解压预打包的 ZIP 后，双击 **离线地图生成器.app**，选择模组导出的 `.cmm.gz` 或 `.gz` 文件，然后选择 HTML 的保存位置。也可以把地图文件拖到应用图标上。生成的 HTML 可以直接在浏览器中打开，地图和导航均可离线使用。
+
+生成器源码位于 [`tools/macos-offline-map`](tools/macos-offline-map)，复用仓库的导出引擎和网页查看器。从源码打包时，在 Mac 上准备 Node.js 24 和 [uv](https://docs.astral.sh/uv/getting-started/installation/)，然后在仓库根目录运行以下命令。
+
+```sh
+uv venv --managed-python --python 3.12.14 .venv
+uv pip install --python .venv/bin/python -r dev/CSLModernMapRenderer/requirements.txt
+npm --prefix dev/CSLModernMapRenderer/viewer ci
+npm --prefix dev/CSLModernMapRenderer/viewer run build
+.venv/bin/python tools/macos-offline-map/bundle.py
+```
+
+打包后的应用位于 `build/macos-offline-map/离线地图生成器.app`，内置 Python 和网页资源，运行时可直接双击使用。
+
 ### 开始使用
 
 1. 安装并启用对应游戏的 CSLModernMap Mod，载入城市。
