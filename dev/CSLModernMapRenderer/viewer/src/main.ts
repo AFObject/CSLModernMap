@@ -1920,13 +1920,13 @@ function placeLabel(id: string, coordinates: [number, number], offset: [number, 
 }
 const TRAIN_STATION_COLOR = '#d87524';
 type DisplayLine = {id: number; name: string; color: string; kind: string; groupId?: number};
-function findDisplayLines(): Map<number, DisplayLine> {
-  const selected = new Set(selectedTransitRouteIds());
+function findDisplayLines(includeHidden = false): Map<number, DisplayLine> {
+  const selected = includeHidden ? null : new Set(selectedTransitRouteIds());
   const lines = new Map<number, DisplayLine>();
   for (const feature of sourceData.transit?.features ?? []) {
     const {lineId, name, color, kind, groupId} = feature.properties;
     const id = Number(lineId);
-    if (selected.has(id)) lines.set(id, {id, name, color, kind, groupId});
+    if (!selected || selected.has(id)) lines.set(id, {id, name, color, kind, groupId});
   }
   return lines;
 }
@@ -1948,6 +1948,7 @@ function layoutRailStationSigns(bodies: RailStationBody[], kept: Set<string>, li
     const element = placeLabel(id, center, [0, 0], {group: 'rail-station-body', labelType: 'poi'});
     element.classList.add('metro-station-sign');
     element.classList.toggle('metro-station-priority', railType === 'metro');
+    if (body.properties.stationId) makeStationPickable(element, body.properties.stationId);
     const servingLines = railType === 'train' ? [{name: 'Train', color: TRAIN_STATION_COLOR}]
       : servingLineIds.flatMap(lineId => {
         const line = lines.get(lineId);
@@ -1970,45 +1971,123 @@ function layoutRailStationSigns(bodies: RailStationBody[], kept: Set<string>, li
     element.replaceChildren(icon, caption);
   }
 }
-type StationDot = {id: string; name: string; center: maplibregl.LngLat; lines: DisplayLine[]};
-function layoutStationDots(kept: Set<string>, lines: Map<number, DisplayLine>, covered: Set<string>): void {
-  const detail = stationDetail();
-  if (navigationFocus || !transitBasemap() || detail === 'overview' || contextOptions.stations === false) return;
-  const groups: StationDot[][] = [];
+type StationDot = {id: string; name: string; center: maplibregl.LngLat; lines: DisplayLine[]; stopIds: number[]};
+
+function findStationDots(lines: Map<number, DisplayLine>): StationDot[] {
   const stations = (sourceData.stations?.features ?? []) as GeoJSON.Feature<GeoJSON.Point, {
-    stationId: string; name: string; servingLineIds: number[];
+    stationId: string; name: string; servingLineIds: number[]; memberStopIds: number[];
   }>[];
-  for (const station of stations) {
+  return stations.flatMap(station => {
     const props = station.properties;
-    if (covered.has(props.stationId)) continue;
     const serving = props.servingLineIds.flatMap(id => lines.get(id) ?? []);
-    if (!serving.length) continue;
-    const name = props.name.trim();
-    if (!name && serving.every(line => line.kind === 'train')) continue;
+    if (!serving.length) return [];
     const center = maplibregl.LngLat.convert(station.geometry.coordinates as [number, number]);
-    const dot = {id: props.stationId, name, center, lines: serving};
+    return [{id: props.stationId, name: props.name.trim(), center, lines: serving, stopIds: props.memberStopIds}];
+  });
+}
+
+function groupStationDots(stations: StationDot[], merge: boolean): StationDot[][] {
+  const groups: StationDot[][] = [];
+  for (const dot of stations) {
     const merged = [dot];
-    if (detail === 'dots') {
+    if (merge) {
       for (let i = groups.length - 1; i >= 0; i--) {
-        if (groups[i].some(member => member.center.distanceTo(center) < 200))
+        if (groups[i].some(member => member.center.distanceTo(dot.center) < 200))
           merged.push(...groups.splice(i, 1)[0]);
       }
     }
     groups.push(merged);
   }
+  return groups;
+}
+
+const isHeavyRail = (line: DisplayLine) => line.kind === 'metro' || line.kind === 'train';
+function stationLabelMembers(group: StationDot[]): StationDot[] {
+  const heavyRail = group.filter(station => station.lines.some(isHeavyRail));
+  return heavyRail.length ? heavyRail : group;
+}
+function stationGroupName(stations: StationDot[]): string {
+  return stations.reduce((longest, station) =>
+    Array.from(station.name).length > Array.from(longest).length ? station.name : longest, '');
+}
+
+function stationDistrict({lng, lat}: maplibregl.LngLat): string | undefined {
+  const contains = (ring: GeoJSON.Position[]): boolean => {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [x, y] = ring[i], [previousX, previousY] = ring[j];
+      if ((y > lat) !== (previousY > lat) && lng < x + (previousX - x) * (lat - y) / (previousY - y))
+        inside = !inside;
+    }
+    return inside;
+  };
+  const districts = (sourceData.districts?.features ?? []) as GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon, {name: string}>[];
+  for (const {geometry, properties} of districts) {
+    if (!properties.name.trim()) continue;
+    const polygons = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates;
+    if (polygons.some(([shell, ...holes]) => shell && contains(shell) && !holes.some(contains))) return properties.name;
+  }
+}
+
+function openStationDetails(stationId?: string, point?: {x: number; y: number}): boolean {
+  if (artworkView.active || selectionMode || selectionStart || !navigation.canInspectStations) return false;
+  const stations = findStationDots(findDisplayLines(true)).filter(station =>
+    station.lines.some(line => isHeavyRail(line) || line.kind === 'monorail'));
+  let station = stationId ? stations.find(candidate => candidate.id === stationId) : undefined;
+  if (!station && point) {
+    const layerIds = ['rail-station-body', 'transit-pois', 'tv-poi'].filter(id => map.getLayer(id));
+    const hit = layerIds.length ? map.queryRenderedFeatures([point.x, point.y], {layers: layerIds})
+      .find(feature => !feature.state?.poiHidden && (feature.layer.id === 'rail-station-body'
+        || feature.properties.sourceKind === 'stop')) : undefined;
+    if (hit) station = stations.find(candidate => candidate.id === hit.properties.stationId
+      || (hit.properties.sourceKind === 'stop' && candidate.stopIds.includes(Number(hit.properties.sourceId))));
+    if (!station && transitBasemap()) {
+      let closest = 9;
+      for (const candidate of stations) {
+        const p = map.project(candidate.center);
+        const distance = Math.hypot(p.x - point.x, p.y - point.y);
+        if (distance >= closest) continue;
+        closest = distance;
+        station = candidate;
+      }
+    }
+  }
+  if (!station) return false;
+  const group = groupStationDots(stations, true).find(members => members.includes(station!)) ?? [station];
+  const lines = [...new Map(group.flatMap(member => member.lines).map(line => [line.id, line])).values()]
+    .sort((a, b) => a.name.localeCompare(b.name, i18n.language, {numeric: true}));
+  clearInspectorSelection();
+  navigation.openStation({name: stationGroupName(stationLabelMembers(group)) || station.name,
+    district: stationDistrict(station.center), lines});
+  return true;
+}
+
+function makeStationPickable(element: HTMLElement, stationId: string): void {
+  element.dataset.stationId = stationId;
+  if (element.classList.contains('station-pickable')) return;
+  element.classList.add('station-pickable');
+  element.addEventListener('click', event => {
+    if (openStationDetails(element.dataset.stationId)) event.stopPropagation();
+  });
+}
+
+function layoutStationDots(kept: Set<string>, lines: Map<number, DisplayLine>, covered: Set<string>): void {
+  const detail = stationDetail();
+  if (navigationFocus || !transitBasemap() || detail === 'overview' || contextOptions.stations === false) return;
+  const stations = findStationDots(lines).filter(station => !covered.has(station.id)
+    && (station.name || !station.lines.every(line => line.kind === 'train')));
+  const groups = groupStationDots(stations, detail === 'dots');
 
   const bounds = map.getBounds();
   for (const group of groups) {
-    const heavyRail = group.filter(station => station.lines.some(line => line.kind === 'metro' || line.kind === 'train'));
-    const labelStations = heavyRail.length ? heavyRail : group;
+    const labelStations = stationLabelMembers(group);
     const first = labelStations[0];
     const center: [number, number] = [
       labelStations.reduce((sum, station) => sum + station.center.lng, 0)/labelStations.length,
       labelStations.reduce((sum, station) => sum + station.center.lat, 0)/labelStations.length,
     ];
     if (!bounds.contains(center)) continue;
-    const name = labelStations.reduce((longest, station) =>
-      Array.from(station.name).length > Array.from(longest).length ? station.name : longest, '');
+    const name = stationGroupName(labelStations);
     const services = new Set(group.flatMap(station => station.lines.map(line => line.groupId ?? line.id)));
     const interchange = group.length > 1 || services.size > 1;
     const color = first.lines[0].color;
@@ -2016,6 +2095,7 @@ function layoutStationDots(kept: Set<string>, lines: Map<number, DisplayLine>, c
     kept.add(id);
     const element = placeLabel(id, center, [0, 0], {group: 'station-dot', labelType: 'poi'});
     element.classList.add('map-station-dot');
+    makeStationPickable(element, first.id);
     element.classList.toggle('metro-station-priority', group.some(station => station.lines.some(line => line.kind === 'metro')));
     const key = JSON.stringify([name, interchange, color]);
     if (element.dataset.stationDot === key) continue;
@@ -2903,6 +2983,7 @@ map.on('click', event => {
   if (suppressNextClick) { suppressNextClick = false; return; }
   if (selectionMode || selectionStart) return;
   if (navigation.selectingPoint && navigation.handleClick(event)) return;
+  if (openStationDetails(undefined, event.point)) return;
   const line = !artworkView.active && navigation.canInspectTransitLines ? transitLineAt(event.point) : null;
   if (line !== null) {
     clearInspectorSelection();

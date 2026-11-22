@@ -55,6 +55,8 @@ export type NavigationRoadStyle = {
   widthMeters: (edge: Edge) => number;
 };
 
+export type StationInspection = {name: string; district?: string; lines: {id: number; name: string; color: string}[]};
+
 export function lineCapsule(name: string, color = '#526071'): HTMLSpanElement {
   const badge = document.createElement('span');
   badge.className = 'navigation-line-capsule';
@@ -125,12 +127,14 @@ export class NavigationControl {
   private composing = false;
   private locatePlace: (feature: SearchFeature) => void = () => {};
   private readonly transitDetails = document.createElement('section');
+  private readonly stationDetails = document.createElement('section');
   private readonly transitSteps = document.createElement('ol');
   private readonly transitSummary = document.createElement('h2');
   private readonly backButton: HTMLButtonElement;
   private readonly closeButton: HTMLButtonElement;
   private readonly fitButton: HTMLButtonElement;
   private detailsOpen = false;
+  private inspectedStation: StationInspection | null = null;
   private inspectedLine: LineInspection | null = null;
   private lineRequest = 0;
   private listScroll = 0;
@@ -161,6 +165,7 @@ export class NavigationControl {
     if (event.key !== 'Escape' || event.defaultPrevented) return;
     if (this.simulation.active) this.simulation.stop();
     else if ((this.detailsOpen || this.inspectedLine) && !this.panel.hidden) this.showTransitDetails(false);
+    else if (this.inspectedStation) this.closeInspection();
     else if (!this.immersive || this.picking || this.busy || this.popup?.isOpen()) this.cancel();
     else if (!this.panel.hidden) {
       this.hidePanel(); this.root.querySelector('button')?.focus();
@@ -176,7 +181,7 @@ export class NavigationControl {
     this.root.className = 'navigation-control'; this.root.hidden = true;
     const toggle = this.button('title', () => {
       if (this.simulation.active) { this.simulation.stop(); return; }
-      if (this.inspectedLine) { this.closeLineInspection(); return; }
+      if (this.inspectedLine || this.inspectedStation) { this.closeInspection(); return; }
       this.panel.hidden = !this.panel.hidden; this.popup?.remove();
       if (!this.panel.hidden) { this.panelOpened(); this.onNavigationOpened(); }
       if (this.panel.hidden) this.cancel(); else { this.planningStarted(); this.activateMissingEndpoint(); }
@@ -187,7 +192,7 @@ export class NavigationControl {
     const heading = document.createElement('div'); heading.className = 'navigation-heading';
     const title = document.createElement('h2'); title.dataset.navigationKey = 'title';
     this.closeButton = this.button('close', () => {
-      if (this.inspectedLine) this.closeLineInspection(); else this.hidePanel(true);
+      if (this.inspectedLine || this.inspectedStation) this.closeInspection(); else this.hidePanel(true);
       toggle.focus();
     });
     this.closeButton.classList.add('navigation-close');
@@ -247,6 +252,7 @@ export class NavigationControl {
     this.transitDetails.tabIndex = -1;
     this.transitSteps.className = 'navigation-itinerary';
     this.transitDetails.append(this.transitSteps);
+    this.stationDetails.className = 'navigation-station-lines'; this.stationDetails.hidden = true;
     this.resultActions.className = 'navigation-actions'; this.resultActions.hidden = true;
     this.simulation = new NavigationSimulation(map, this.root, meters => this.drawProgress(meters), preview3d);
     this.resultActions.append(this.simulation.startButton);
@@ -254,7 +260,7 @@ export class NavigationControl {
     statusActions.append(this.cancelButton, this.retryButton);
     const clear = this.button('clearRoute', () => this.clearRoute()); clear.className = 'navigation-clear';
     this.panel.append(heading, this.modes, endpointButtons, this.placeResults, this.morePlaces, this.coordinateDetails, this.message, statusActions,
-      this.summary, this.transitDetails, this.resultActions, this.routeDetails, clear);
+      this.summary, this.transitDetails, this.stationDetails, this.resultActions, this.routeDetails, clear);
     for (const name of ['click', 'dblclick', 'pointerdown', 'touchstart'] as const)
       this.panel.addEventListener(name, event => event.stopPropagation());
     this.root.append(toggle, this.panel); document.body.append(this.root);
@@ -395,7 +401,7 @@ export class NavigationControl {
   }
 
   hidePanel(exitNavigation = false): void {
-    if (this.inspectedLine) this.closeLineInspection();
+    if (this.inspectedLine || this.inspectedStation) this.closeInspection();
     this.panel.hidden = true;
     if (exitNavigation) this.clearRoute();
     else this.cancel();
@@ -406,14 +412,29 @@ export class NavigationControl {
   get canInspectTransitLines(): boolean {
     return this.loader !== null && this.panel.hidden && !this.result;
   }
+  get canInspectStations(): boolean {
+    return this.canInspectTransitLines || (this.inspectedStation !== null && this.inspectedLine === null);
+  }
   setImmersive(immersive: boolean): void { this.immersive = immersive; }
 
+  openStation(station: StationInspection): void {
+    if (!this.canInspectStations) return;
+    this.cancel();
+    this.inspectedStation = station;
+    this.panelOpened();
+    this.panel.hidden = false;
+    this.root.querySelector('button')?.setAttribute('aria-expanded', 'true');
+    this.displayResult();
+  }
+
   async openTransitLine(id: string): Promise<void> {
-    if (!this.canInspectTransitLines) return;
+    const canOpen = () => this.canInspectTransitLines || (!this.inspectedLine
+      && this.inspectedStation?.lines.some(line => String(line.id) === id));
+    if (!canOpen()) return;
     const request = ++this.lineRequest, operation = this.operation;
     try {
       const {data} = await this.ensureClient();
-      if (request !== this.lineRequest || operation !== this.operation || !this.canInspectTransitLines || !data.transit) return;
+      if (request !== this.lineRequest || operation !== this.operation || !canOpen() || !data.transit) return;
       const inspection = inspectLine(data.transit, id);
       if (!inspection) return;
       this.cancel();
@@ -430,14 +451,15 @@ export class NavigationControl {
     }
   }
 
-  private closeLineInspection(): void {
+  private closeInspection(returnToStation = false): void {
     this.lineRequest++;
     this.inspectedLine = null;
-    this.panel.hidden = true;
-    this.root.querySelector('button')?.setAttribute('aria-expanded', 'false');
+    if (!returnToStation) this.inspectedStation = null;
+    this.panel.hidden = this.inspectedStation === null;
+    this.root.querySelector('button')?.setAttribute('aria-expanded', String(!this.panel.hidden));
     this.draw();
     this.displayResult();
-    if (!this.result) this.message.textContent = text('ready');
+    if (this.panel.hidden) this.message.textContent = text('ready');
   }
 
   private translate(): void {
@@ -453,7 +475,7 @@ export class NavigationControl {
     this.closeButton.title = text('close');
     this.coordinates.placeholder = text('coordinate'); this.coordinates.setAttribute('aria-label', text('coordinate'));
     this.renderEndpoints(); this.renderCards(); this.displayResult();
-    if (!this.result) this.message.textContent = text(this.busy ? 'computing' : this.picking === 'origin' ? 'pickOrigin' : this.picking ? 'pickDestination' : 'ready');
+    if (!this.result && !this.inspectedStation) this.message.textContent = text(this.busy ? 'computing' : this.picking === 'origin' ? 'pickOrigin' : this.picking ? 'pickDestination' : 'ready');
     if (this.picking && document.activeElement === this.placeInputs[this.picking] && !this.composing) this.searchPlaces(this.picking);
   }
 
@@ -479,6 +501,7 @@ export class NavigationControl {
 
   clear(): void {
     this.inspectedLine = null;
+    this.inspectedStation = null;
     this.panel.hidden = true; this.clearRoute(); this.client?.stop(); this.client = null; this.loading = null; this.loader = null; this.epoch++;
     this.searchCandidates = [];
     this.root.hidden = true; this.panel.hidden = true;
@@ -814,17 +837,20 @@ export class NavigationControl {
 
   private updateDetailView(): void {
     this.transitDetails.hidden = !this.inspectedLine && (!this.detailsOpen || this.profile !== 'transit' || !this.result);
-    this.summary.hidden = !this.transitDetails.hidden;
-    this.transitSummary.hidden = this.transitDetails.hidden;
-    this.backButton.hidden = this.transitDetails.hidden || Boolean(this.inspectedLine);
+    this.stationDetails.hidden = !this.inspectedStation || Boolean(this.inspectedLine);
+    const showingDetails = !this.transitDetails.hidden || !this.stationDetails.hidden;
+    this.summary.hidden = showingDetails;
+    this.transitSummary.hidden = !showingDetails;
+    this.backButton.hidden = this.transitDetails.hidden || Boolean(this.inspectedLine && !this.inspectedStation);
     this.closeButton.hidden = !this.backButton.hidden;
     this.fitButton.hidden = !this.result;
-    this.panel.classList.toggle('navigation-details-open', !this.transitDetails.hidden);
+    this.panel.classList.toggle('navigation-details-open', showingDetails);
+    this.panel.classList.toggle('navigation-station-open', !this.stationDetails.hidden);
   }
 
   private showTransitDetails(open: boolean): void {
     if (!open && this.inspectedLine) {
-      this.closeLineInspection();
+      this.closeInspection(true);
       return;
     }
     this.detailsOpen = open;
@@ -860,6 +886,11 @@ export class NavigationControl {
     this.routeDetails.hidden = !result || result.costProfile === 'transit';
     this.updateDetailView();
     this.simulation.setRoute(result);
+    if (!this.stationDetails.hidden && this.inspectedStation) {
+      this.message.replaceChildren();
+      this.renderStationDetails(this.inspectedStation);
+      return;
+    }
     if (result) {
       const missing = ['SPEED_LIMIT_MISSING', 'TRAFFIC_MISSING', 'PREFAB_SPEED_LIMIT'].find(code => result.warningCodes.includes(code));
       this.message.textContent = missing ? text(missing) : '';
@@ -875,6 +906,25 @@ export class NavigationControl {
       const item = document.createElement('li'); item.textContent = step.kind === 'arrive' ? text('arrive') : `${text(step.kind)} ${step.roadName || text('unnamed')} · ${Math.round(step.distanceM)} m`;
       this.steps.append(item);
     }
+  }
+
+  private renderStationDetails(station: StationInspection): void {
+    const name = document.createElement('span');
+    name.className = 'navigation-station-title'; name.textContent = spaceMixedText(station.name || text('unnamedStop'));
+    this.transitSummary.replaceChildren(name);
+    if (station.district) {
+      const district = document.createElement('span');
+      district.className = 'navigation-station-district';
+      district.textContent = spaceMixedText(station.district);
+      this.transitSummary.append(district);
+    }
+    this.stationDetails.replaceChildren(...station.lines.map(line => {
+      const button = document.createElement('button');
+      button.type = 'button'; button.className = 'navigation-station-line';
+      button.append(lineCapsule(line.name || `#${line.id}`, line.color));
+      button.addEventListener('click', () => void this.openTransitLine(String(line.id)));
+      return button;
+    }));
   }
 
   private renderTransitItinerary(result: RouteResult): void {
@@ -1210,7 +1260,7 @@ export class NavigationControl {
           layout: {'line-cap': 'round', 'line-join': 'round'}, paint: {
             'line-color': casing ? '#869AAE' : alternativeRouteColor, 'line-opacity': 1,
             'line-color-transition': {duration: 0}, 'line-width': this.roadStyle.width(casing)}});
-      this.map.addLayer({id: lineIds[0], type: 'line', source: 'navigation', filter: ['all', ['!=', ['get', 'alternative'], true], ['in', ['get', 'mode'], ['literal', ['GROUND', 'ELEVATED', 'TUNNEL', 'RIDE']]]], layout: {'line-cap': 'round', 'line-join': 'round'}, paint: {'line-color': ['case', ['==', ['get', 'mode'], 'RIDE'], '#ffffff', '#195ba5'], 'line-width': this.roadStyle.width(true)}});
+      this.map.addLayer({id: lineIds[0], type: 'line', source: 'navigation', filter: ['all', ['!=', ['get', 'alternative'], true], ['in', ['get', 'mode'], ['literal', ['GROUND', 'ELEVATED', 'TUNNEL', 'RIDE']]]], layout: {'line-cap': 'round', 'line-join': 'round'}, paint: {'line-color': ['case', ['==', ['get', 'mode'], 'RIDE'], 'rgba(255, 255, 255, 0.6)', '#195ba5'], 'line-width': this.roadStyle.width(true)}});
       this.map.addLayer({id: lineIds[1], type: 'line', source: 'navigation', filter: ['all', ['!=', ['get', 'alternative'], true], ['in', ['get', 'mode'], ['literal', ['GROUND', 'ELEVATED', 'TUNNEL']]]], layout: {'line-cap': 'round', 'line-join': 'round'}, paint: {'line-color': currentRouteColor, 'line-color-transition': {duration: 0}, 'line-width': this.roadStyle.width(false)}});
       this.map.addLayer({id: lineIds[2], type: 'line', source: 'navigation', filter: ['==', ['get', 'mode'], 'ACCESS'], paint: {'line-color': '#64748b', 'line-width': 1.6, 'line-dasharray': [2, 2]}});
       this.map.addLayer({id: lineIds[3], type: 'fill', source: 'navigation', filter: ['==', ['get', 'mode'], 'BUILDING'], paint: {'fill-color': ['get', 'color'], 'fill-opacity': .25}});

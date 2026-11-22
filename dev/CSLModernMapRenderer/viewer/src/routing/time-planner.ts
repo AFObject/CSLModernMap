@@ -5,13 +5,14 @@ import {isBoarding} from './itinerary';
 
 export const WALK_SECONDS_PER_METER = 16 * 60 / 1000;
 const specs: Record<string, number[]> = {
-  TRAIN: [120,.8,.8,45,1,90], METRO: [80,1,1,30,1,60],
-  MONORAIL: [50,1,1,30,1,60], BUS: [40,.8,1,20,1.3,60]
+  TRAIN: [120,.8,.8,45,90], METRO: [80,1,1,30,60],
+  MONORAIL: [50,1,1,30,60], BUS: [40,.8,1,20,60]
 };
 const vehicle = (e: Edge) => specs[e.transitKind ?? ''] ?? specs.BUS;
 export const dwellSeconds = (edge: Edge): number => vehicle(edge)[3];
 export function runningSeconds(e: Edge): number {
-  const [kmh,a,b,,factor] = vehicle(e), v=kmh/3.6, d=e.lengthM;
+  const [kmh,a,b] = vehicle(e), v=kmh/3.6, d=e.lengthM;
+  const factor = e.transitKind === 'BUS' ? 1.5 : 1.1;
   const d0=v*v/(2*a)+v*v/(2*b);
   return factor*(d>=d0 ? v/a+v/b+(d-d0)/v : Math.sqrt(2*d*(a+b)/(a*b)));
 }
@@ -75,7 +76,7 @@ export class TimePlanner {
       [...(this.owners.get(from.toNode) ?? [])].some(owner => this.owners.get(to.fromNode)?.has(owner));
     const walkingDistanceM = sameStation ? 0 : Math.max(100, meters);
     const connectionSeconds = sameStation ? 60 : walkingDistanceM * WALK_SECONDS_PER_METER;
-    return {sameStation, walkingDistanceM, durationSeconds: connectionSeconds + vehicle(to)[5]};
+    return {sameStation, walkingDistanceM, durationSeconds: connectionSeconds + vehicle(to)[4]};
   }
   solve(a:Snap,b:Snap,preference:TransitPreference,avoid?:string){
     const start=this.tree(a),end=this.tree(b),rides=this.rides;
@@ -88,7 +89,7 @@ export class TimePlanner {
     for(let i=0;i<rides.length;i++){
       const e=rides[i],walk=start.dist[index(e.fromNode)]*WALK_SECONDS_PER_METER;
       if(!Number.isFinite(walk)||e.lineId===avoid)continue;
-      const train=vehicle(e)[5]+run[i];cost[i]=walk*walkBias+train;time[i]=walk+train;q.push(i,cost[i]);
+      const train=vehicle(e)[4]+run[i];cost[i]=walk*walkBias+train;time[i]=walk+train;q.push(i,cost[i]);
     }
     let best=Infinity,seconds=Infinity,winner=-1,join=-1,direct:Step[]=[];
     // Endpoints may share a street, including two interior points on one edge.

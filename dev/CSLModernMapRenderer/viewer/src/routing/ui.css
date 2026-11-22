@@ -101,6 +101,25 @@
 .navigation-transit-summary > span { display: block; }
 .navigation-transit-total { font-size: 21px; font-weight: 600; }
 .navigation-transit-subtitle { margin-top: 2px; color: var(--nav-secondary); font-weight: 400; }
+.navigation-panel.navigation-station-open { border-radius: 14px; }
+.navigation-station-open > .navigation-clear { display: none; }
+.navigation-station-title { color: var(--nav-text); font-size: 23px; font-weight: 650; overflow-wrap: anywhere; }
+.navigation-station-district { margin-block-start: 3px; color: var(--nav-secondary); }
+.navigation-station-lines {
+  margin-top: 8px; border-radius: 10px; background: var(--nav-control);
+  min-height: 0; overflow: auto; overscroll-behavior: contain;
+}
+.navigation-panel.navigation-station-open > .navigation-station-lines { flex: 1 1 auto; }
+.navigation-control .navigation-station-line {
+  display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px;
+  border: 0; border-radius: 0; padding: 9px 12px; min-height: 41px; text-align: start;
+}
+.navigation-control .navigation-station-line + .navigation-station-line { border-top: 1px solid var(--nav-border); }
+.navigation-station-line::after {
+  content: ''; flex: none; width: 6px; height: 6px; color: var(--nav-secondary);
+  border-block-start: 1.5px solid; border-inline-end: 1.5px solid; transform: rotate(45deg);
+}
+.navigation-station-line .navigation-line-capsule { overflow-wrap: anywhere; }
 .navigation-details-open > :not(.navigation-transit-details) { flex-shrink: 0; }
 .navigation-status:empty { display: none; }
 .navigation-transit-details { display: flex; flex: 1 1 auto; min-height: 0; }
