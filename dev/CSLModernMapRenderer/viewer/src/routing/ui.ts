@@ -404,7 +404,6 @@ export class NavigationControl {
 
   get selectingPoint(): boolean { return this.picking !== null; }
   get transitFocus(): boolean { return this.result?.costProfile === 'transit'; }
-  get guidingRoute(): boolean { return this.result !== null && this.inspectedLine === null; }
   get canInspectTransitLines(): boolean {
     return this.loader !== null && this.panel.hidden && !this.result;
   }

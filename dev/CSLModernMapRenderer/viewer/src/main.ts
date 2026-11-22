@@ -311,7 +311,6 @@ const navigation: NavigationControl = new NavigationControl(map,
 let navigationFocus=false;
 navigation.onRouteFocus=active=>{
   document.body.classList.toggle('transit-route-focus', navigation.transitFocus);
-  document.body.classList.toggle('navigation-guidance', navigation.guidingRoute);
   if(active===navigationFocus)return;
   navigationFocus=active;document.body.classList.toggle('navigation-focus',active);
   if(currentManifest && map.getLayer('transit'))applyContextStyling();
@@ -593,7 +592,7 @@ function poiVisibilityFilter(): ExpressionSpecification {
     .map<ExpressionSpecification>(group => ['!', ['in', group, ['coalesce', ['get', 'visibilityGroups'], ['literal', []]]]])];
 }
 function poiFilter(): ExpressionSpecification {
-  if (navigation.guidingRoute || !poisVisibleAtScale()) return alwaysFalseFilter();
+  if (!showMapPois()) return alwaysFalseFilter();
   const zoom: ExpressionSpecification = ['zoom'];
   const types: ExpressionSpecification = contextMode === 'transit' &&
       (contextOptions.ordinary_pois == null || contextOptions.ordinary_pois === 'hidden') ? airportPoi
@@ -603,7 +602,7 @@ function poiFilter(): ExpressionSpecification {
     ['<=', ['get', 'minZoom'], zoom], ['in', zoom, ['get', 'visibleZooms']]];
 }
 function transitPoiFilter(): ExpressionSpecification {
-  if (navigation.guidingRoute || !poisVisibleAtScale() || transitBasemap()) return alwaysFalseFilter();
+  if (!showMapPois() || transitBasemap()) return alwaysFalseFilter();
   const zoom: ExpressionSpecification = ['zoom'];
   return ['all', poiVisibilityFilter(), ['==', ['get', 'owner'], 'transit'],
     ['<=', ['get', 'minZoom'], zoom], ['in', zoom, ['get', 'visibleZooms']]];
@@ -618,6 +617,9 @@ function localMapDetailsVisible(): boolean {
 }
 function poisVisibleAtScale(): boolean {
   return contextMode === 'map' && transitBasemap() ? scaleBarRange() <= 1500 : localMapDetailsVisible();
+}
+function showMapPois(): boolean {
+  return !navigationFocus && poisVisibleAtScale();
 }
 function stationScaleVisible(): boolean {
   return scaleBarRange() <= 400;
@@ -670,7 +672,7 @@ function alwaysFalseFilter(): ExpressionSpecification {
   return ['==', ['get', 'featureId'], ''] as unknown as ExpressionSpecification;
 }
 function transitViewPoiFilter(): ExpressionSpecification {
-  if (navigation.guidingRoute || !poisVisibleAtScale() || transitBasemap()) return alwaysFalseFilter();
+  if (!showMapPois() || transitBasemap()) return alwaysFalseFilter();
   const zoom: ExpressionSpecification = ['zoom'];
   return ['all', poiVisibilityFilter(), ['<=', ['coalesce', ['get', 'minZoom'], 0], zoom],
     ['any', ['==', ['get', 'iconStatus'], 'empty'], ['in', zoom, ['get', 'visibleZooms']]]];
@@ -1425,7 +1427,7 @@ function applyBasemapPaint(): void {
   const mutedBuilding = lighterPaint(buildingColor(), baseTint);
   for (const id of ['buildings', 'poi-area']) {
     set(id, 'fill-color', mutedBuilding);
-    set(id, 'fill-opacity', id === 'poi-area' && (navigation.guidingRoute || !poisVisibleAtScale()) ? 0 : 1);
+    set(id, 'fill-opacity', id === 'poi-area' && !showMapPois() ? 0 : 1);
   }
   set('buildings', 'fill-outline-color', lighterPaint(token('building').border ?? '#D7DAE1', baseTint));
   set(BUILDINGS_3D, 'fill-extrusion-color', mutedBuilding);
@@ -2289,7 +2291,7 @@ function layoutLabels(): void {
   if (!currentManifest || map.isMoving()) return;
   labelLayoutTime = performance.now();
   const localDetails = localMapDetailsVisible();
-  const showPois = !navigation.guidingRoute && poisVisibleAtScale();
+  const showPois = showMapPois();
   const overlay = showsTransportOverlay();
   const ordinary = contextMode === 'transit' ? contextOptions.ordinary_pois !== 'hidden' && contextOptions.ordinary_pois != null : currentManifest.layers.poi !== false;
   const renderedLayers = overlay

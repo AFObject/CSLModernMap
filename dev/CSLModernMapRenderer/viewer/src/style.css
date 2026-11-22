@@ -145,7 +145,7 @@ html, body, body *, body *::before, body *::after {
 .navigation-focus .map-transit-badge {filter:grayscale(1);opacity:.4}
 
 .map-poi-caption { font-weight: 600; text-shadow: 0 1px 2px rgba(38, 48, 62, .23); }
-.navigation-guidance .map-poi-caption:not(.map-district-caption),
+.navigation-focus .map-poi-pickable,
 .transit-route-focus .map-district-caption { display: none !important; }
 .navigation-focus :is(.metro-station-sign, .map-station-dot) { display: none !important; }
 .metro-station-sign { width: 20px; height: 20px; pointer-events: none; }
@@ -164,6 +164,10 @@ html, body, body *, body *::before, body *::after {
 }
 .metro-station-lines { display: flex; gap: 4px; margin-top: 2px; font-size: 10px; }
 .metro-station-lines .navigation-line-capsule { border-radius: 5px; padding: 0 5px; }
+.metro-station-caption:is([data-side="top"], [data-side="bottom"]) .metro-station-lines { justify-content: center; }
+.metro-station-caption:is([data-side="top"], [data-side="bottom"]) .metro-station-name { margin-inline: auto; }
+.metro-station-caption[data-side="left"] .metro-station-lines { justify-content: flex-end; }
+.metro-station-caption[data-side="left"] .metro-station-name { margin-left: auto; }
 
 .map-station-dot {
   width: 6px; height: 6px; border-radius: 50%; background: var(--station-dot-color);
