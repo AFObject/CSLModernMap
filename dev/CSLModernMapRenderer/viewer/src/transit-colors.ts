@@ -1,5 +1,6 @@
 const darkText = '#17202a';
 const lightText = '#fff';
+const darkTextMinLuminance = .52;
 
 function luminance(hex: string): number {
   let digits = hex.replace(/^#/, '');
@@ -12,11 +13,6 @@ function luminance(hex: string): number {
   }, 0);
 }
 
-const darkLuminance = luminance(darkText);
-
 export function transitContrastText(background: string): string {
-  const value = luminance(background);
-  const darkContrast = (Math.max(value, darkLuminance) + .05) / (Math.min(value, darkLuminance) + .05);
-  const lightContrast = 1.05 / (value + .05);
-  return darkContrast >= lightContrast ? darkText : lightText;
+  return luminance(background) >= darkTextMinLuminance ? darkText : lightText;
 }
