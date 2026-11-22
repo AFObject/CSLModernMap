@@ -28,13 +28,14 @@ export function inspectLine(data: NonNullable<NavigationPackage['transit']>, lin
       owners.add(id);
     }
   }
-  const reversesAt = (incoming: Edge, outgoing: Edge): boolean => {
+  const returnsToPreviousStation = (incoming: Edge, outgoing: Edge): boolean => {
     const a = incoming.fromNode, b = outgoing.toNode;
     if (a === b) return true;
     if ([...(stationOwners.get(a) ?? [])].some(owner => stationOwners.get(b)?.has(owner))) return true;
     const name = incoming.fromStop?.trim().toLowerCase();
-    if (name && name === outgoing.toStop?.trim().toLowerCase() && distance(data.nodes[a], data.nodes[b]) < 200)
-      return true;
+    return Boolean(name && name === outgoing.toStop?.trim().toLowerCase() && distance(data.nodes[a], data.nodes[b]) < 200);
+  };
+  const retracesApproach = (incoming: Edge, outgoing: Edge): boolean => {
     if (incoming.schematic || outgoing.schematic) return false;
     // An express return may skip the previous platform but still retrace the approach.
     const before = data.geometries[incoming.geometryRef], after = data.geometries[outgoing.geometryRef];
@@ -51,8 +52,14 @@ export function inspectLine(data: NonNullable<NavigationPackage['transit']>, lin
   const splitDirections = (chain: Edge[]) => {
     const closed = follows(chain.at(-1)!, chain[0]);
     // CS1 can store both directions in one closed chain, with a reversal at each terminus.
-    const turns = chain.flatMap((edge, index) =>
-      (index > 0 || closed) && reversesAt(chain[index - 1] ?? chain.at(-1)!, edge) ? [index] : []);
+    const pairs = chain.flatMap((after, index) => index > 0 || closed
+      ? [{before: chain[index - 1] ?? chain.at(-1)!, after, index}] : []);
+    const stationTurns = new Set(pairs.filter(({before, after}) => returnsToPreviousStation(before, after))
+      .map(({index}) => index));
+    // A shared approach can also occur at an intermediate stop on a branch.
+    const turns = stationTurns.size >= (closed ? 2 : 1) ? [...stationTurns]
+      : pairs.filter(({before, after, index}) => stationTurns.has(index) || retracesApproach(before, after))
+        .map(({index}) => index);
     if (closed && turns.length) {
       turns.forEach((start, index) => {
         const end = turns[index + 1];
