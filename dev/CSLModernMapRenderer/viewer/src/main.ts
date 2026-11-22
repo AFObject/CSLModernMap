@@ -14,6 +14,7 @@ import { AreaSurfaceLayer } from './area-surface-layer';
 import { NavigationControl, lineCapsule } from './routing/ui';
 import { controlIcon } from './control-icons';
 import { Preview3D, BUILDINGS_3D, CAMERA_TRANSITION_MS } from './preview-3d';
+import {scaledTransitWidth, transitWidthFactor} from './transit-scale';
 import { PreviewControls } from './preview-controls';
 import {ArtworkView, type ArtworkDelivery, type ArtworkTool, type ArtworkObserveAction, type ArtworkPick} from './artwork-view';
 import { trafficColor as trafficColorExpression } from './traffic-paint';
@@ -297,6 +298,7 @@ const navigation: NavigationControl = new NavigationControl(map,
   navigationPlaceAt, {properties: navigationRoadStyle, width: navigationWidth, widthMeters: navigationWidthMeters}, preview3d);
 let navigationFocus=false;
 navigation.onRouteFocus=active=>{
+  document.body.classList.toggle('transit-route-focus', navigation.transitFocus);
   if(active===navigationFocus)return;
   navigationFocus=active;document.body.classList.toggle('navigation-focus',active);
   if(currentManifest && map.getLayer('transit'))applyContextStyling();
@@ -400,7 +402,7 @@ function navigationRoadStyle(edge: Edge): Record<string, unknown> {
 function navigationWidth(casing: boolean): ExpressionSpecification {
   const alternative = ['==', ['get', 'alternative'], true];
   return ['interpolate', ['exponential', 2], ['zoom'], ...Array.from({length: 25}, (_, z) => [z,
-    ['case', ['==', ['get', 'mode'], 'RIDE'], casing ? 8 : 4.8,
+    ['case', ['==', ['get', 'mode'], 'RIDE'], (casing ? 8 : 4.8) * transitWidthFactor(z),
       ['+', casing ? 4.8 : 0, ['max', ['case', alternative, 4, 6.4],
         ['*', ['case', alternative, 1.04, 1.28], ['case', ['>', ['get', 'surfaceWidth'], 0],
           ['*', ['get', 'surfaceWidth'], Math.pow(2, z)/MPP0*WEB_MERCATOR_METERS_PER_DEGREE/LOCAL_METERS_PER_DEGREE],
@@ -559,7 +561,7 @@ function poiVisibilityFilter(): ExpressionSpecification {
     .map<ExpressionSpecification>(group => ['!', ['in', group, ['coalesce', ['get', 'visibilityGroups'], ['literal', []]]]])];
 }
 function poiFilter(): ExpressionSpecification {
-  if (navigationFocus) return alwaysFalseFilter();
+  if (navigationFocus || !localMapDetailsVisible()) return alwaysFalseFilter();
   const zoom: ExpressionSpecification = ['zoom'];
   const types: ExpressionSpecification = contextMode === 'transit' &&
       (contextOptions.ordinary_pois == null || contextOptions.ordinary_pois === 'hidden') ? airportPoi
@@ -569,7 +571,7 @@ function poiFilter(): ExpressionSpecification {
     ['<=', ['get', 'minZoom'], zoom], ['in', zoom, ['get', 'visibleZooms']]];
 }
 function transitPoiFilter(): ExpressionSpecification {
-  if (navigationFocus || transitBasemap()) return alwaysFalseFilter();
+  if (navigationFocus || !localMapDetailsVisible() || transitBasemap()) return alwaysFalseFilter();
   const zoom: ExpressionSpecification = ['zoom'];
   return ['all', poiVisibilityFilter(), ['==', ['get', 'owner'], 'transit'],
     ['<=', ['get', 'minZoom'], zoom], ['in', zoom, ['get', 'visibleZooms']]];
@@ -578,6 +580,9 @@ function scaleBarRange(): number {
   const {clientWidth, clientHeight} = map.getContainer();
   const x = clientWidth / 2, y = clientHeight / 2;
   return map.unproject([x-70,y]).distanceTo(map.unproject([x+70,y]));
+}
+function localMapDetailsVisible(): boolean {
+  return scaleBarRange() <= 6000;
 }
 function stationScaleVisible(): boolean {
   return scaleBarRange() <= 400;
@@ -630,7 +635,7 @@ function alwaysFalseFilter(): ExpressionSpecification {
   return ['==', ['get', 'featureId'], ''] as unknown as ExpressionSpecification;
 }
 function transitViewPoiFilter(): ExpressionSpecification {
-  if (navigationFocus || transitBasemap()) return alwaysFalseFilter();
+  if (navigationFocus || !localMapDetailsVisible() || transitBasemap()) return alwaysFalseFilter();
   const zoom: ExpressionSpecification = ['zoom'];
   return ['all', poiVisibilityFilter(), ['<=', ['coalesce', ['get', 'minZoom'], 0], zoom],
     ['any', ['==', ['get', 'iconStatus'], 'empty'], ['in', zoom, ['get', 'visibleZooms']]]];
@@ -710,14 +715,15 @@ function poiIconBounds(feature: MapGeoJSONFeature, center: maplibregl.Point, siz
   const height = image ? image.data.height / image.pixelRatio * size / 24 : size;
   return [center.x - width / 2, center.y - height / 2, center.x + width / 2, center.y + height / 2];
 }
-function transportLineWidth(): ExpressionSpecification | number {
+function transportLineWidth(overlay: boolean): ExpressionSpecification {
   const width = Number(token('transit').width ?? 3);
-  const selected = .4 * Number(contextOptions.line_width ?? width);
+  const selected = .4 * Number(overlay ? contextOptions.line_width ?? width : width);
   const entries = Object.entries(token('transit').typeWidths ?? {});
-  if (!entries.length) return selected;
-  return ['match', ['downcase', ['to-string', ['get', 'kind']]],
-    ...entries.flatMap(([kind, value]) => [kind, width ? Number(value) * selected / width : selected]),
-    selected] as ExpressionSpecification;
+  return scaledTransitWidth(factor => {
+    const base = selected * factor;
+    return entries.length ? ['match', ['downcase', ['to-string', ['get', 'kind']]],
+      ...entries.flatMap(([kind, value]) => [kind, width ? Number(value) * base / width : base]), base] as ExpressionSpecification : base;
+  });
 }
 /** 公共交通视图线路标签的视觉规范。
  *
@@ -1251,17 +1257,14 @@ function applyTheme(theme: FullTheme): void {
   set('district-border', 'line-width', Number(token('district').width ?? 1));
   set('zone-border', 'line-width', Number(token('zone').width ?? 1));
   updateTrafficPaint();
-  const modeWidths = Object.entries(token('transit').typeWidths ?? {});
-  set('transit', 'line-width', modeWidths.length ? ['match', ['downcase', ['to-string', ['get', 'kind']]],
-    ...modeWidths.flatMap(([kind, width]) => [kind, .4*Number(width)]),
-    (.4*Number(token('transit').width ?? 3))] : .4*Number(token('transit').width ?? 3));
+  set('transit', 'line-width', transportLineWidth(false));
   set('stations', 'circle-radius', mapStationMetrics().radius);
   set('stations', 'circle-stroke-width', mapStationMetrics().stroke);
   for (const id of ['stations', 'tv-station']) {
     set(id, 'circle-color', token('transit').stationFill ?? '#fff');
     set(id, 'circle-stroke-color', token('transit').stationOutline ?? '#39424C');
   }
-  set('tv-line', 'line-width', transportLineWidth());
+  set('tv-line', 'line-width', transportLineWidth(true));
   set('tv-station', 'circle-radius', transitStationMetrics().radius);
   set('tv-station', 'circle-stroke-width', transitStationMetrics().stroke);
   layout('tv-station-interchange', 'icon-size', transitStationMetrics().outer / 8);
@@ -1316,6 +1319,7 @@ async function setLayerVisibility(layer: string, visible: boolean): Promise<void
   for (const item of markers.values()) if (item.group === layer) item.marker.getElement().style.display = visible ? '' : 'none';
   if (layer === 'watermark') watermark.style.display = visible ? '' : 'none';
   if (currentManifest) currentManifest.layers[layer] = visible;
+  if (layer === 'district' || layer === 'zone') updateAreaVisibility();
   if (layer === 'traffic') {
     for (const checkbox of document.querySelectorAll<HTMLInputElement>('input[data-layer="traffic"]')) checkbox.checked = visible;
     await syncTraffic();
@@ -1351,7 +1355,7 @@ function applyBasemapPaint(): void {
   const mutedBuilding = lighterPaint(buildingColor(), baseTint);
   for (const id of ['buildings', 'poi-area']) {
     set(id, 'fill-color', mutedBuilding);
-    set(id, 'fill-opacity', id === 'poi-area' && navigationFocus ? 0 : 1);
+    set(id, 'fill-opacity', id === 'poi-area' && (navigationFocus || !localMapDetailsVisible()) ? 0 : 1);
   }
   set('buildings', 'fill-outline-color', lighterPaint(token('building').border ?? '#D7DAE1', baseTint));
   set(BUILDINGS_3D, 'fill-extrusion-color', mutedBuilding);
@@ -1388,8 +1392,19 @@ function applyBasemapPaint(): void {
   }
   updateTrafficColors();
 }
+function updateAreaVisibility(): void {
+  const show = localMapDetailsVisible() && !navigation.transitFocus;
+  for (const kind of areaKinds) {
+    const visible = show && currentManifest?.layers[kind] !== false;
+    for (const id of [`${kind}-fill`, `${kind}-border`]) if (map.getLayer(id))
+      map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+    const surface = areaSurfaces[kind];
+    if (surface) surface.visible = visible;
+  }
+}
 function applyContextStyling(): void {
   updateBaseTextLayers();
+  updateAreaVisibility();
   const overlay = showsTransportOverlay();
   for (const kind of areaKinds) updateAreaSurfacePaint(kind);
   if (!map.getLayer('transit')) return;
@@ -1404,7 +1419,8 @@ function applyContextStyling(): void {
   set('transit', 'line-color', navigationFocus ? '#e1e3e5' : ['get', 'color']);
   set('stations', 'circle-opacity', overlay ? 0 : 1);
   set('tv-line', 'line-opacity', overlay ? 1 : 0);
-  set('tv-line', 'line-width', transportLineWidth());
+  set('transit', 'line-width', transportLineWidth(false));
+  set('tv-line', 'line-width', transportLineWidth(true));
   set('tv-line', 'line-color', navigationFocus ? '#e1e3e5' : ['get', 'color']);
   set('tv-station', 'circle-opacity', overlay ? 1 : 0);
   set('tv-station', 'circle-radius', transitStationMetrics().radius);
@@ -1796,7 +1812,6 @@ function applyLabelHalo(el: HTMLElement, labelType: string): void {
   el.style.setProperty('--label-stroke-blur', `${blur}px`);
 }
 const baseTextLayers = [
-  {id: 'district-labels', scope: 'district', labelType: 'district'},
   {id: 'zone-labels', scope: 'zone', labelType: 'park'},
   {id: 'road-labels', scope: 'road', labelType: 'road'},
 ];
@@ -1854,6 +1869,7 @@ function updateBaseTextLayers(): void {
   for (const {id, scope, labelType} of baseTextLayers) {
     if (!map.getLayer(id)) continue;
     const enabled = contextMode === 'map' && currentManifest?.layers.label !== false
+      && (scope !== 'zone' || (localMapDetailsVisible() && !navigation.transitFocus))
       && visibility[scope] !== false;
     map.setLayoutProperty(id, 'visibility', enabled ? 'visible' : 'none');
     map.setFilter(id, baseTextFilter(scope));
@@ -2030,8 +2046,9 @@ function stationDistrict({lng, lat}: maplibregl.LngLat): string | undefined {
 }
 
 function openStationDetails(stationId?: string, point?: {x: number; y: number}): boolean {
-  if (artworkView.active || selectionMode || selectionStart || !navigation.canInspectStations) return false;
-  const stations = findStationDots(findDisplayLines(true)).filter(station =>
+  if (artworkView.active || selectionMode || selectionStart || !navigation.canInspectPlaces) return false;
+  const allStations = findStationDots(findDisplayLines(true));
+  const stations = allStations.filter(station =>
     station.lines.some(line => isHeavyRail(line) || line.kind === 'monorail'));
   let station = stationId ? stations.find(candidate => candidate.id === stationId) : undefined;
   if (!station && point) {
@@ -2054,11 +2071,39 @@ function openStationDetails(stationId?: string, point?: {x: number; y: number}):
   }
   if (!station) return false;
   const group = groupStationDots(stations, true).find(members => members.includes(station!)) ?? [station];
-  const lines = [...new Map(group.flatMap(member => member.lines).map(line => [line.id, line])).values()]
+  const nearbyBuses = allStations.flatMap(candidate => {
+    const buses = candidate.lines.filter(line => line.kind === 'bus');
+    return buses.length && group.some(member => member.center.distanceTo(candidate.center) < 200) ? buses : [];
+  });
+  const lines = [...new Map([...group.flatMap(member => member.lines), ...nearbyBuses].map(line => [line.id, line])).values()]
     .sort((a, b) => a.name.localeCompare(b.name, i18n.language, {numeric: true}));
+  const key = ['train', 'metro', 'monorail'].find(kind => lines.some(line => line.kind === kind)) ?? 'metro';
   clearInspectorSelection();
-  navigation.openStation({name: stationGroupName(stationLabelMembers(group)) || station.name,
-    district: stationDistrict(station.center), lines});
+  navigation.openPlace({name: stationGroupName(stationLabelMembers(group)) || station.name || i18n.t('navigation_unnamedStop'),
+    kind: i18n.t(`navigation_placeStation_${key}`), district: stationDistrict(station.center), lines,
+    position: [station.center.lat * 111195, 0, -station.center.lng * 111195],
+    geometry: {type: 'Point', coordinates: station.center.toArray()}});
+  return true;
+}
+
+function openBuildingDetails(point: maplibregl.Point): boolean {
+  if (artworkView.active || !navigation.canInspectPlaces) return false;
+  const layers = ['pois', 'transit-pois', BUILDINGS_3D, 'buildings'].filter(id => map.getLayer(id));
+  if (!layers.length) return false;
+  const feature = map.queryRenderedFeatures(point, {layers})
+    .find(hit => !hit.state?.poiHidden && Number(hit.properties.buildingId) > 0);
+  if (!feature) return false;
+  const building = sourceData.buildings?.features?.find((candidate: any) =>
+    String(candidate.properties.buildingId) === String(feature.properties.buildingId)) ?? feature;
+  const category = building.properties.category;
+  const kind = building.properties.categoryName || (['residential', 'commercial', 'industrial', 'office'].includes(category)
+    ? i18n.t(`navigation_placeBuilding_${category}`) : i18n.t('navigation_building'));
+  const name = feature.properties.name || building.properties.name || kind;
+  const anchor = feature.geometry.type === 'Point'
+    ? maplibregl.LngLat.convert(feature.geometry.coordinates as [number, number]) : map.unproject(point);
+  clearInspectorSelection();
+  navigation.openPlace({name, kind, district: stationDistrict(anchor), geometry: building.geometry,
+    position: [anchor.lat * 111195, 0, -anchor.lng * 111195]});
   return true;
 }
 
@@ -2095,6 +2140,7 @@ function layoutStationDots(kept: Set<string>, lines: Map<number, DisplayLine>, c
     kept.add(id);
     const element = placeLabel(id, center, [0, 0], {group: 'station-dot', labelType: 'poi'});
     element.classList.add('map-station-dot');
+    element.classList.toggle('is-scale-dot', detail === 'dots');
     makeStationPickable(element, first.id);
     element.classList.toggle('metro-station-priority', group.some(station => station.lines.some(line => line.kind === 'metro')));
     const key = JSON.stringify([name, interchange, color]);
@@ -2112,13 +2158,14 @@ function layoutLabels(): void {
   if (artworkView.active) return;
   if (!currentManifest || map.isMoving()) return;
   labelLayoutTime = performance.now();
+  const localDetails = localMapDetailsVisible();
   const overlay = showsTransportOverlay();
   const ordinary = contextMode === 'transit' ? contextOptions.ordinary_pois !== 'hidden' && contextOptions.ordinary_pois != null : currentManifest.layers.poi !== false;
   const renderedLayers = overlay
     ? [contextOptions.facilities_enabled === false ? '' : 'tv-poi',
        currentManifest.layers.poi === false ? '' : 'pois']
     : currentManifest.layers.poi === false ? [] : ['pois', 'transit-pois'];
-  const layers = navigationFocus ? [] : renderedLayers.filter(id => id && map.getLayer(id));
+  const layers = navigationFocus || !localDetails ? [] : renderedLayers.filter(id => id && map.getLayer(id));
   // GeoJSON 更新及瓦片切换期间，符号放置结果可能仍引用上一版要素索引。
   if (layers.some(id => !map.isSourceLoaded((map.getLayer(id) as {source: string}).source))) return;
   const rendered = layers.length ? map.queryRenderedFeatures({layers}) : [];
@@ -2135,7 +2182,7 @@ function layoutLabels(): void {
     map.getCanvas().clientHeight, icons.map(f => [f.id, f.geometry, f.properties?.stationAnchor, f.layer.id]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))), currentManifest.layers,
     map.getBearing(), map.getPitch(), contextMode, contextOptions, token('transit').label,
     token('transit').labelStyle, labelVisibility, token('baseText'),
-    poiNameVisibility, effectivePoiIcons()]);
+    poiNameVisibility, effectivePoiIcons(), localDetails, navigation.transitFocus]);
   if (key === labelLayoutKey) return;
   labelLayoutKey = key;
   const kept = new Set<string>();
@@ -2166,6 +2213,30 @@ function layoutLabels(): void {
         left + caption.right - root.left + 2, top + caption.bottom - root.top + 2]);
     }
   }
+  const bounds = map.getBounds();
+  if (localDetails && !navigation.transitFocus) {
+    const size = labelFontSize('poi') * 1.2;
+    const font = labelFontFamily('poi');
+    for (const feature of sourceData.labels?.features ?? []) {
+      if (feature.properties.labelScope !== 'district' || feature.geometry.type !== 'Point') continue;
+      const coords = feature.geometry.coordinates as [number, number];
+      if (!bounds.contains(coords)) continue;
+      const text = spaceMixedText(String(feature.properties.displayText || feature.properties.text || ''));
+      if (!text) continue;
+      const p = map.project(coords), halfWidth = measuredLabelWidth(text, `600 ${size}px ${font}`) / 2 + 2;
+      const halfHeight = size / 2 + 2;
+      const box: Box = [p.x - halfWidth, p.y - halfHeight, p.x + halfWidth, p.y + halfHeight];
+      if (overlaps(box)) continue;
+      reserve(box);
+      const id = `district-label:${feature.properties.featureId}`;
+      kept.add(id);
+      const label = placeLabel(id, coords, [0, 0], {group: 'district-name', labelType: 'poi'});
+      label.classList.add('map-label', 'map-label-poi', 'map-poi-caption', 'map-district-caption');
+      label.style.color = '#697078'; label.style.fontSize = `${size}px`; label.style.fontFamily = font;
+      label.textContent = text;
+      applyLabelHalo(label, 'poi');
+    }
+  }
   const stationRadius = transitStationMetrics().outer;
   const poiId = (f: GeoJSON.Feature) => String(f.properties?.poiId ?? f.properties?.featureId ?? f.id);
   const isMetro = (f: GeoJSON.Feature) => f.properties?.kind === 'metro';
@@ -2190,14 +2261,13 @@ function layoutLabels(): void {
     }
   };
   const width = map.getCanvas().clientWidth, height = map.getCanvas().clientHeight;
-  const sources = navigationFocus ? [] : overlay
+  const sources = navigationFocus || !localDetails ? [] : overlay
     ? (currentManifest.layers.poi === false ? [] : mapPoiDisplayFeatures.filter((f: any) =>
         f.properties?.transportClass === 'airport' || (ordinary && f.properties?.owner !== 'transit')))
     : currentManifest.layers.poi === false ? [] : mapPoiDisplayFeatures;
   const labelSeen = new Set<string>();
   const selectedRoutes = new Set(selectedTransitRouteIds());
   const iconGroups = effectivePoiIcons();
-  const bounds = map.getBounds();
   const labelIcons = sources.filter((f: any) => {
     if (f.geometry.type !== 'Point' || !bounds.contains(f.geometry.coordinates as [number, number])) return false;
     const properties = f.properties ?? {};
@@ -2355,12 +2425,16 @@ function layoutLabels(): void {
 }
 let lastStationScale: boolean | undefined;
 let lastStationDetail: StationDetail | undefined;
+let lastLocalDetails: boolean | undefined;
 map.on('move', () => {
   const visible = stationScaleVisible();
   const detail = stationDetail();
-  if ((visible !== lastStationScale || detail !== lastStationDetail) && currentManifest && map.getLayer('stations')) {
+  const localDetails = localMapDetailsVisible();
+  if ((visible !== lastStationScale || detail !== lastStationDetail || localDetails !== lastLocalDetails)
+      && currentManifest && map.getLayer('stations')) {
     lastStationScale = visible;
     lastStationDetail = detail;
+    lastLocalDetails = localDetails;
     applyContextStyling();
   }
   scheduleLabels();
@@ -2984,13 +3058,16 @@ map.on('click', event => {
   if (selectionMode || selectionStart) return;
   if (navigation.selectingPoint && navigation.handleClick(event)) return;
   if (openStationDetails(undefined, event.point)) return;
-  const line = !artworkView.active && navigation.canInspectTransitLines ? transitLineAt(event.point) : null;
+  const line = !artworkView.active && navigation.canInspectPlaces ? transitLineAt(event.point) : null;
   if (line !== null) {
+    navigation.dismissPlace();
     clearInspectorSelection();
     void navigation.openTransitLine(line);
     return;
   }
+  if (openBuildingDetails(event.point)) return;
   if (navigation.handleClick(event)) return;
+  navigation.dismissPlace();
   pickObjectAt(event.point);
 });
 map.on('mousemove', event => {

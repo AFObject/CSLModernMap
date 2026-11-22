@@ -16,6 +16,7 @@ import {pointAt} from './geometry';
 import {WALK_SECONDS_PER_METER} from './time-planner';
 import {inspectLine, type LineInspection} from './line-inspection';
 import {spaceMixedText} from '../text-spacing';
+import {scaledTransitWidth} from '../transit-scale';
 
 import type {TransitCandidate} from './types';
 import './ui.css';
@@ -55,7 +56,10 @@ export type NavigationRoadStyle = {
   widthMeters: (edge: Edge) => number;
 };
 
-export type StationInspection = {name: string; district?: string; lines: {id: number; name: string; color: string}[]};
+export type PlaceInspection = {
+  name: string; kind: string; district?: string; position: XYZ; geometry: GeoJSON.Geometry;
+  lines?: {id: number; name: string; color: string; kind: string}[];
+};
 
 export function lineCapsule(name: string, color = '#526071'): HTMLSpanElement {
   const badge = document.createElement('span');
@@ -134,7 +138,8 @@ export class NavigationControl {
   private readonly closeButton: HTMLButtonElement;
   private readonly fitButton: HTMLButtonElement;
   private detailsOpen = false;
-  private inspectedStation: StationInspection | null = null;
+  private inspectedPlace: PlaceInspection | null = null;
+  private placeMarker: maplibregl.Marker | null = null;
   private inspectedLine: LineInspection | null = null;
   private lineRequest = 0;
   private listScroll = 0;
@@ -165,7 +170,7 @@ export class NavigationControl {
     if (event.key !== 'Escape' || event.defaultPrevented) return;
     if (this.simulation.active) this.simulation.stop();
     else if ((this.detailsOpen || this.inspectedLine) && !this.panel.hidden) this.showTransitDetails(false);
-    else if (this.inspectedStation) this.closeInspection();
+    else if (this.inspectedPlace) this.closeInspection();
     else if (!this.immersive || this.picking || this.busy || this.popup?.isOpen()) this.cancel();
     else if (!this.panel.hidden) {
       this.hidePanel(); this.root.querySelector('button')?.focus();
@@ -181,7 +186,7 @@ export class NavigationControl {
     this.root.className = 'navigation-control'; this.root.hidden = true;
     const toggle = this.button('title', () => {
       if (this.simulation.active) { this.simulation.stop(); return; }
-      if (this.inspectedLine || this.inspectedStation) { this.closeInspection(); return; }
+      if (this.inspectedLine || this.inspectedPlace) { this.closeInspection(); return; }
       this.panel.hidden = !this.panel.hidden; this.popup?.remove();
       if (!this.panel.hidden) { this.panelOpened(); this.onNavigationOpened(); }
       if (this.panel.hidden) this.cancel(); else { this.planningStarted(); this.activateMissingEndpoint(); }
@@ -192,7 +197,7 @@ export class NavigationControl {
     const heading = document.createElement('div'); heading.className = 'navigation-heading';
     const title = document.createElement('h2'); title.dataset.navigationKey = 'title';
     this.closeButton = this.button('close', () => {
-      if (this.inspectedLine || this.inspectedStation) this.closeInspection(); else this.hidePanel(true);
+      if (this.inspectedLine || this.inspectedPlace) this.closeInspection(); else this.hidePanel(true);
       toggle.focus();
     });
     this.closeButton.classList.add('navigation-close');
@@ -401,7 +406,7 @@ export class NavigationControl {
   }
 
   hidePanel(exitNavigation = false): void {
-    if (this.inspectedLine || this.inspectedStation) this.closeInspection();
+    if (this.inspectedLine || this.inspectedPlace) this.closeInspection();
     this.panel.hidden = true;
     if (exitNavigation) this.clearRoute();
     else this.cancel();
@@ -409,18 +414,20 @@ export class NavigationControl {
   }
 
   get selectingPoint(): boolean { return this.picking !== null; }
+  get transitFocus(): boolean { return this.result?.costProfile === 'transit'; }
   get canInspectTransitLines(): boolean {
     return this.loader !== null && this.panel.hidden && !this.result;
   }
-  get canInspectStations(): boolean {
-    return this.canInspectTransitLines || (this.inspectedStation !== null && this.inspectedLine === null);
+  get canInspectPlaces(): boolean {
+    return this.canInspectTransitLines || (this.inspectedPlace !== null && this.inspectedLine === null);
   }
   setImmersive(immersive: boolean): void { this.immersive = immersive; }
 
-  openStation(station: StationInspection): void {
-    if (!this.canInspectStations) return;
+  openPlace(station: PlaceInspection): void {
+    if (!this.canInspectPlaces) return;
     this.cancel();
-    this.inspectedStation = station;
+    this.inspectedPlace = station;
+    this.updatePlaceMarker();
     this.panelOpened();
     this.panel.hidden = false;
     this.root.querySelector('button')?.setAttribute('aria-expanded', 'true');
@@ -429,7 +436,7 @@ export class NavigationControl {
 
   async openTransitLine(id: string): Promise<void> {
     const canOpen = () => this.canInspectTransitLines || (!this.inspectedLine
-      && this.inspectedStation?.lines.some(line => String(line.id) === id));
+      && this.inspectedPlace?.lines?.some(line => String(line.id) === id));
     if (!canOpen()) return;
     const request = ++this.lineRequest, operation = this.operation;
     try {
@@ -439,6 +446,7 @@ export class NavigationControl {
       if (!inspection) return;
       this.cancel();
       this.inspectedLine = inspection;
+      this.updatePlaceMarker();
       this.panelOpened();
       this.panel.hidden = false;
       this.root.querySelector('button')?.setAttribute('aria-expanded', 'true');
@@ -451,11 +459,16 @@ export class NavigationControl {
     }
   }
 
+  dismissPlace(): void {
+    if (this.inspectedPlace && !this.inspectedLine) this.closeInspection();
+  }
+
   private closeInspection(returnToStation = false): void {
     this.lineRequest++;
     this.inspectedLine = null;
-    if (!returnToStation) this.inspectedStation = null;
-    this.panel.hidden = this.inspectedStation === null;
+    if (!returnToStation) this.inspectedPlace = null;
+    this.updatePlaceMarker();
+    this.panel.hidden = this.inspectedPlace === null;
     this.root.querySelector('button')?.setAttribute('aria-expanded', String(!this.panel.hidden));
     this.draw();
     this.displayResult();
@@ -475,7 +488,7 @@ export class NavigationControl {
     this.closeButton.title = text('close');
     this.coordinates.placeholder = text('coordinate'); this.coordinates.setAttribute('aria-label', text('coordinate'));
     this.renderEndpoints(); this.renderCards(); this.displayResult();
-    if (!this.result && !this.inspectedStation) this.message.textContent = text(this.busy ? 'computing' : this.picking === 'origin' ? 'pickOrigin' : this.picking ? 'pickDestination' : 'ready');
+    if (!this.result && !this.inspectedPlace) this.message.textContent = text(this.busy ? 'computing' : this.picking === 'origin' ? 'pickOrigin' : this.picking ? 'pickDestination' : 'ready');
     if (this.picking && document.activeElement === this.placeInputs[this.picking] && !this.composing) this.searchPlaces(this.picking);
   }
 
@@ -501,7 +514,8 @@ export class NavigationControl {
 
   clear(): void {
     this.inspectedLine = null;
-    this.inspectedStation = null;
+    this.inspectedPlace = null;
+    this.updatePlaceMarker();
     this.panel.hidden = true; this.clearRoute(); this.client?.stop(); this.client = null; this.loading = null; this.loader = null; this.epoch++;
     this.searchCandidates = [];
     this.root.hidden = true; this.panel.hidden = true;
@@ -837,11 +851,11 @@ export class NavigationControl {
 
   private updateDetailView(): void {
     this.transitDetails.hidden = !this.inspectedLine && (!this.detailsOpen || this.profile !== 'transit' || !this.result);
-    this.stationDetails.hidden = !this.inspectedStation || Boolean(this.inspectedLine);
+    this.stationDetails.hidden = !this.inspectedPlace || Boolean(this.inspectedLine);
     const showingDetails = !this.transitDetails.hidden || !this.stationDetails.hidden;
     this.summary.hidden = showingDetails;
     this.transitSummary.hidden = !showingDetails;
-    this.backButton.hidden = this.transitDetails.hidden || Boolean(this.inspectedLine && !this.inspectedStation);
+    this.backButton.hidden = this.transitDetails.hidden || Boolean(this.inspectedLine && !this.inspectedPlace);
     this.closeButton.hidden = !this.backButton.hidden;
     this.fitButton.hidden = !this.result;
     this.panel.classList.toggle('navigation-details-open', showingDetails);
@@ -886,9 +900,9 @@ export class NavigationControl {
     this.routeDetails.hidden = !result || result.costProfile === 'transit';
     this.updateDetailView();
     this.simulation.setRoute(result);
-    if (!this.stationDetails.hidden && this.inspectedStation) {
+    if (!this.stationDetails.hidden && this.inspectedPlace) {
       this.message.replaceChildren();
-      this.renderStationDetails(this.inspectedStation);
+      this.renderPlaceDetails(this.inspectedPlace);
       return;
     }
     if (result) {
@@ -908,23 +922,61 @@ export class NavigationControl {
     }
   }
 
-  private renderStationDetails(station: StationInspection): void {
+  private updatePlaceMarker(): void {
+    this.placeMarker?.remove();
+    this.placeMarker = null;
+    const place = this.inspectedPlace;
+    if (!place || this.inspectedLine) return;
+    const element = document.createElement('div');
+    element.className = 'navigation-selected-place';
+    element.setAttribute('aria-hidden', 'true');
+    const pin = document.createElement('span');
+    pin.className = 'navigation-selected-place-pin';
+    pin.append(controlIcon(place.lines ? 'train' : 'building'));
+    element.append(pin);
+    this.placeMarker = new maplibregl.Marker({element, anchor: 'bottom', rotationAlignment: 'viewport'})
+      .setLngLat(geo(place.position)).addTo(this.map);
+  }
+
+  private renderPlaceDetails(place: PlaceInspection): void {
     const name = document.createElement('span');
-    name.className = 'navigation-station-title'; name.textContent = spaceMixedText(station.name || text('unnamedStop'));
-    this.transitSummary.replaceChildren(name);
-    if (station.district) {
-      const district = document.createElement('span');
-      district.className = 'navigation-station-district';
-      district.textContent = spaceMixedText(station.district);
-      this.transitSummary.append(district);
-    }
-    this.stationDetails.replaceChildren(...station.lines.map(line => {
+    name.className = 'navigation-station-title'; name.textContent = spaceMixedText(place.name);
+    const subtitle = document.createElement('span');
+    subtitle.className = 'navigation-station-district';
+    subtitle.textContent = spaceMixedText([place.kind, place.district].filter(Boolean).join(' · '));
+    this.transitSummary.replaceChildren(name, subtitle);
+    const actions = document.createElement('div');
+    actions.className = 'navigation-place-actions';
+    for (const [endpoint, icon, key] of [['origin', 'map-pin', 'timelineDepart'], ['destination', 'flag', 'timelineArrive']] as const) {
       const button = document.createElement('button');
-      button.type = 'button'; button.className = 'navigation-station-line';
-      button.append(lineCapsule(line.name || `#${line.id}`, line.color));
-      button.addEventListener('click', () => void this.openTransitLine(String(line.id)));
-      return button;
-    }));
+      button.type = 'button';
+      setButtonContent(button, text(key), icon);
+      button.addEventListener('click', () => {
+        this.origin = this.destination = null;
+        this.closeInspection();
+        if (place.lines) this.profile = 'transit';
+        this.begin(endpoint);
+        void this.choose(place.position, {name: place.name, geometry: place.geometry, kind: place.lines ? 'station' : 'building'});
+      });
+      actions.append(button);
+    }
+    this.stationDetails.replaceChildren(actions);
+    for (const kind of ['metro', 'monorail', 'train', 'bus'] as const) {
+      const lines = place.lines?.filter(line => line.kind === kind) ?? [];
+      if (!lines.length) continue;
+      const label = document.createElement('h3');
+      label.className = 'navigation-station-mode'; label.textContent = text(`placeMode_${kind}`);
+      const list = document.createElement('div');
+      list.className = 'navigation-station-line-group';
+      for (const line of lines) {
+        const button = document.createElement('button');
+        button.type = 'button'; button.className = 'navigation-station-line';
+        button.append(lineCapsule(line.name || `#${line.id}`, line.color));
+        button.addEventListener('click', () => void this.openTransitLine(String(line.id)));
+        list.append(button);
+      }
+      this.stationDetails.append(label, list);
+    }
   }
 
   private renderTransitItinerary(result: RouteResult): void {
@@ -1265,9 +1317,9 @@ export class NavigationControl {
       this.map.addLayer({id: lineIds[2], type: 'line', source: 'navigation', filter: ['==', ['get', 'mode'], 'ACCESS'], paint: {'line-color': '#64748b', 'line-width': 1.6, 'line-dasharray': [2, 2]}});
       this.map.addLayer({id: lineIds[3], type: 'fill', source: 'navigation', filter: ['==', ['get', 'mode'], 'BUILDING'], paint: {'fill-color': ['get', 'color'], 'fill-opacity': .25}});
       this.map.addLayer({id: lineIds[4], type: 'line', source: 'navigation', filter: ['==', ['get', 'mode'], 'BUILDING'], paint: {'line-color': ['get', 'color'], 'line-width': 3}});
-      this.map.addLayer({id: lineIds[5], type: 'line', source: 'navigation', filter: ['all', ['==', ['get', 'mode'], 'RIDE'], ['!=', ['get', 'schematic'], true]], layout: {'line-cap': 'round', 'line-join': 'round'}, paint: {'line-color': ['get', 'color'], 'line-width': 4.8}});
+      this.map.addLayer({id: lineIds[5], type: 'line', source: 'navigation', filter: ['all', ['==', ['get', 'mode'], 'RIDE'], ['!=', ['get', 'schematic'], true]], layout: {'line-cap': 'round', 'line-join': 'round'}, paint: {'line-color': ['get', 'color'], 'line-width': scaledTransitWidth(factor => 4.8 * factor)}});
       this.map.addLayer({id: lineIds[6], type: 'line', source: 'navigation', filter: ['==', ['get', 'mode'], 'WALK'], paint: {'line-color': '#64748b', 'line-width': 3.2, 'line-dasharray': [1, 1]}});
-      this.map.addLayer({id: lineIds[7], type: 'line', source: 'navigation', filter: ['all', ['==', ['get', 'mode'], 'RIDE'], ['==', ['get', 'schematic'], true]], paint: {'line-color': ['get', 'color'], 'line-width': 4.8, 'line-dasharray': [2, 1]}});
+      this.map.addLayer({id: lineIds[7], type: 'line', source: 'navigation', filter: ['all', ['==', ['get', 'mode'], 'RIDE'], ['==', ['get', 'schematic'], true]], paint: {'line-color': ['get', 'color'], 'line-width': scaledTransitWidth(factor => 4.8 * factor), 'line-dasharray': [2, 1]}});
       this.map.addLayer({id: lineIds[8], type: 'circle', source: 'navigation', filter: ['==', ['get', 'mode'], 'STOP'],
         layout: {'circle-sort-key': ['case', ['==', ['get', 'endpoint'], true], 1, 0]},
         paint: {'circle-color': '#ffffff', 'circle-radius': ['case', ['==', ['get', 'endpoint'], true], 5, 4.5],
