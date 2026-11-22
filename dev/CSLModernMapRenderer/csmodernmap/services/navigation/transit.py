@@ -7,15 +7,15 @@ import hashlib
 import json
 import struct
 
-from shapely.geometry import LineString, Point
+from shapely.geometry import LineString, Point, Polygon
 from shapely.strtree import STRtree
 
-WALK_FACTOR = 3
-BOARDING_COST = 500
+WALK_FACTOR = 10
+BOARDING_COST = 300
 TRANSIT_PREFERENCES = {
     "balanced": {"walkFactor": WALK_FACTOR, "boardingCost": BOARDING_COST},
-    "less-walking": {"walkFactor": 6, "boardingCost": BOARDING_COST},
-    "fewer-transfers": {"walkFactor": WALK_FACTOR, "boardingCost": 1500},
+    "less-walking": {"walkFactor": WALK_FACTOR, "boardingCost": BOARDING_COST},
+    "fewer-transfers": {"walkFactor": WALK_FACTOR, "boardingCost": BOARDING_COST},
 }
 
 
@@ -36,6 +36,39 @@ def candidate_id(graph_revision, traversals):
         ">d", 0 if part[key] == 0 else part[key]).hex() for key in ("fromFraction", "toFraction")]]
         for part in traversals], ensure_ascii=False, separators=(",", ":"))
     return "transit:" + hashlib.sha256(f"{graph_revision}\n{signature}".encode("utf-8")).hexdigest()
+
+
+def _platform_offset(stop, points):
+    """Project to the approach at this end of the track, even if the path loops back nearby."""
+    limit = 200.0
+    best = (float("inf"), 0.0)
+    offset = 0.0
+    for a, b in zip(points, points[1:]):
+        if offset >= limit:
+            break
+        length = dist(a, b)
+        dx, dz = b[0] - a[0], b[2] - a[2]
+        span = dx * dx + dz * dz
+        if span:
+            fraction = ((stop[0] - a[0]) * dx + (stop[2] - a[2]) * dz) / span
+            fraction = min(1.0, (limit - offset) / length, max(0.0, fraction))
+            error = (stop[0] - a[0] - fraction * dx) ** 2 + (stop[2] - a[2] - fraction * dz) ** 2
+            best = min(best, (error, offset + fraction * length))
+        offset += length
+    return best[1]
+
+
+def _trim_ride(points, start, end):
+    from .route import _slice
+
+    length = sum(dist(a, b) for a, b in zip(points, points[1:]))
+    first = _platform_offset(start, points)
+    last = length - _platform_offset(end, points[::-1])
+    if first >= last:
+        return []
+    clipped = _slice(points, first / length, last / length)
+    # Adjacent rides meet at the exact same stop node, without extra links to the untrimmed track ends.
+    return [start, *clipped[1:-1], end]
 
 
 def compile_transit(document, roads):
@@ -69,6 +102,21 @@ def compile_transit(document, roads):
         if reverse:
             edges.append(dict(base, id=ref+":b", fromNode=end, toNode=start, reverse=True))
 
+    # A common parent building identifies one facility, even with several footprints.
+    buildings = {b.id: b for b in document.buildings}
+    footprints = []
+    for building in document.buildings:
+        parent = building
+        seen = set()
+        while parent.parent_id in buildings and parent.id not in seen:
+            seen.add(parent.id)
+            parent = buildings[parent.parent_id]
+        if not any(str(b.role) == "TRANSIT_STATION" for b in (building, parent)):
+            continue
+        ring = [[v.x, v.z] for v in building.footprint.points]
+        if len(ring) >= 3:
+            footprints.append((str(parent.id), Polygon(ring), ring))
+    station_objects = {}
     used_stops = {str(s) for route in document.routes for s in route.stop_ids}
     for ident in sorted(used_stops):
         stop = stops.get(ident)
@@ -79,6 +127,13 @@ def compile_transit(document, roads):
             continue
         node = "stop:"+ident
         nodes[node] = pos
+        point = Point(pos[0], pos[2])
+        owners = {owner for owner, shape, _ in footprints if shape.covers(point)}
+        if len(owners) == 1:
+            owner = next(iter(owners))
+            obj = station_objects.setdefault(owner, {"platforms": [], "rings": [
+                ring for key, _, ring in footprints if key == owner]})
+            obj["platforms"].append(ident)
         if not roads:
             continue
         point = Point(pos[0], pos[2])
@@ -103,8 +158,15 @@ def compile_transit(document, roads):
         anchor = roads[index]["fromNode"] if fraction == 0 else roads[index]["toNode"] if fraction == 1 else "access:"+ident
         anchors[index].append((fraction, anchor))
         snapped = _slice(points, fraction, fraction)[0]
-        add("access:"+ident, anchor, node, [snapped, pos], mode="ACCESS", reverse=True)
+        add("access:"+ident, anchor, node, [snapped, pos], mode="ACCESS", reverse=True, accessRoadId=roads[index]["id"])
 
+    for owner, obj in station_objects.items():
+        platforms = obj["platforms"]
+        hub = "facility:"+owner
+        center = [sum(nodes["stop:"+s][i] for s in platforms)/len(platforms) for i in range(3)]
+        for ident in platforms:
+            add(f"inside:{owner}:{ident}", hub, "stop:"+ident,
+                [center, nodes["stop:"+ident]], mode="ACCESS", reverse=True, stationObject=owner)
     for road, cuts in zip(roads, anchors):
         cuts.sort()
         for index, ((a, start), (b, end)) in enumerate(zip(cuts, cuts[1:])):
@@ -119,7 +181,7 @@ def compile_transit(document, roads):
         if line is None:
             continue
         source_nodes = [stops[str(s)].network_node_id for s in route.stop_ids if str(s) in stops]
-        definition = type_def(str(line.kind).title())
+        definition = type_def(str(line.kind))
         cs1 = document.metadata.origin.game.casefold() == "cs1"
         index_by_node = (track_path_index(view, definition.line_network, path_cache)
                          if cs1 and definition else {})
@@ -157,8 +219,13 @@ def compile_transit(document, roads):
                     chain = next(iter(paths))
                     if all(sid in networks for sid in chain):
                         points = [[p.x, p.y, p.z] for p in track_chain_points(view, chain, first.position)]
-            schematic = not points or not all(isfinite(v) for p in points for v in p)
-            points = [nodes[start], nodes[end]] if schematic else [nodes[start], *points, nodes[end]]
+            if points and all(isfinite(v) for p in points for v in p):
+                points = _trim_ride(points, nodes[start], nodes[end])
+            else:
+                points = []
+            schematic = not points
+            if schematic:
+                points = [nodes[start], nodes[end]]
             add(f"ride:{route.id}:{index}", start, end, points, mode="RIDE", name=line.name,
                 lineId=str(line.id), routeId=str(route.id), fromStopIndex=a,
                 toStopIndex=0 if b == len(route.stop_ids)-1 and route.stop_ids[b] == route.stop_ids[0] else b,
@@ -166,7 +233,7 @@ def compile_transit(document, roads):
                 toStop=stops[str(route.stop_ids[b])].name.text,
                 transitKind=str(line.kind), schematic=schematic,
                 color=("#%02x%02x%02x" % tuple(line.user_color[:3])) if line.user_color else "#7c3aed")
-    return {"nodes": nodes, "geometries": geometries, "edges": edges,
+    return {"nodes": nodes, "geometries": geometries, "edges": edges, "stationObjects": station_objects,
             "costModel": {"id": "transit-roads-v2", "preferences": {
                 key: dict(value) for key, value in TRANSIT_PREFERENCES.items()}}}
 

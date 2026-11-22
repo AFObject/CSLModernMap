@@ -110,7 +110,8 @@ def compile_navigation(document) -> dict:
         if length <= 0:
             excluded["zero_length"] += 1
             continue
-        walking_roads.append({"id": str(road.id), "fromNode": start, "toNode": end,
+        if str(road.level) != "HIGHWAY":
+            walking_roads.append({"id": str(road.id), "fromNode": start, "toNode": end,
                               "points": points, "name": road.display_name or road.game_name,
                               "mode": str(road.mode)})
         access = road.car_access

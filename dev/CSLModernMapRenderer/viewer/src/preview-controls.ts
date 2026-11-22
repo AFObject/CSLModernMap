@@ -1,5 +1,6 @@
 // 桌面与离线地图共用的搜索、快捷图层和操作说明。
 import {i18n} from './i18n';
+import {spaceMixedText} from './text-spacing';
 import {controlIcon, setButtonContent, type ControlIcon} from './control-icons';
 import type {NavigationControl} from './routing/ui';
 import {searchCandidates, searchGroups, type Candidate, type SearchFeature as Feature,
@@ -343,7 +344,7 @@ export class PreviewControls {
       group.items.slice(0, limit).forEach((item, index) => {
         const option = document.createElement('div'); option.id = `${section.id}-item-${index}`;
         option.className = 'preview-search-option';
-        const name = document.createElement('span'); name.textContent = item.name;
+        const name = document.createElement('span'); name.textContent = spaceMixedText(item.name);
         const pixels = item.iconKey ? this.icons.get(item.iconKey) : undefined;
         if (pixels) {
           const icon = document.createElement('canvas'); icon.width = pixels.width; icon.height = pixels.height;

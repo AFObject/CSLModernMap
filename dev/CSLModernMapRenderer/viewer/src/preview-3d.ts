@@ -152,7 +152,7 @@ export class Preview3D implements IControl {
     if (!map.getLayer(BUILDINGS_3D)) map.addLayer({id: BUILDINGS_3D, type: 'fill-extrusion', source: 'buildings',
       filter: ['>', ['coalesce', ['get', 'height_m'], 0], 0],
       paint: {'fill-extrusion-height': ['*', ['get', 'height_m'], metersScale], 'fill-extrusion-base': 0,
-        'fill-extrusion-color': color, 'fill-extrusion-opacity': 1}});
+        'fill-extrusion-color': color, 'fill-extrusion-opacity': Number(map.getPaintProperty('buildings','fill-opacity') ?? 1)}});
     else map.setPaintProperty(BUILDINGS_3D, 'fill-extrusion-color', color);
     map.moveLayer(BUILDINGS_3D);
     for (const layer of map.getStyle().layers) if (layer.type === 'symbol') map.moveLayer(layer.id);

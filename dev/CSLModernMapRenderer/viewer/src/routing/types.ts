@@ -9,7 +9,7 @@ export type Edge = {
   congestion?: number | null; speedLimitMps?: number | null; speedSource?: string | null;
   recommendedCostPerMeter?: number;
   widthM?: number;
-  roadMode?: string; lineId?: string; routeId?: string; fromStopIndex?: number; toStopIndex?: number;
+  stationObject?: string; roadMode?: string; lineId?: string; routeId?: string; fromStopIndex?: number; toStopIndex?: number;
   fromStop?: string; toStop?: string; transitKind?: string; color?: string; schematic?: boolean;
 };
 export type NavigationPackage = {
@@ -17,7 +17,8 @@ export type NavigationPackage = {
   graphRevision: string; costRevision: string; capturedAt: string;
   costModel?: {id: string; walkFactor?: number; boardingCost?: number; preferences?: Record<TransitPreference, TransitCost>};
   durationModel?: string;
-  transit?: Pick<NavigationPackage, 'nodes' | 'geometries' | 'edges' | 'costModel'>;
+  stationObjects?: Record<string, {platforms: string[]; rings: number[][][]; center?: XYZ}>;
+  transit?: Pick<NavigationPackage, 'nodes' | 'geometries' | 'edges' | 'costModel' | 'stationObjects'>;
   nodes: Record<string, XYZ>; geometries: Record<string, XYZ[]>; edges: Edge[];
   components: Record<string, string>; capabilities: Record<string, string>;
   diagnostics: { roadCount: number; nodeCount: number; edgeCount: number;
@@ -30,18 +31,20 @@ export type Snap = {
   name: string; mode: string; direction: 'forward' | 'backward' | 'both';
 };
 export type Endpoint = { position: XYZ; snap: Snap; place?: {name: string; geometry: GeoJSON.Geometry; key?: string; kind?: string; context?: string} };
-export type TransitStop = {stopId: string; stopIndex: number; name: string; position: XYZ};
+export type TransitStop = {stopId: string; stopIndex: number; name: string; position: XYZ; elapsedSeconds?: number};
+export type TransitTransfer = {sameStation: boolean; walkingDistanceM: number; durationSeconds: number};
 export type TransitLeg = {mode: 'walk' | 'ride'; name: string; fromStop?: string; toStop?: string;
   stops: number; distanceM: number; color?: string; schematic?: boolean;
   traversalStart: number; traversalEnd: number; lineId?: string; routeId?: string; transitKind?: string;
   stopSequence?: TransitStop[]; walkKind?: 'access' | 'transfer' | 'egress' | 'walking-only';
+  transfer?: TransitTransfer;
   fromStopRef?: TransitStop; toStopRef?: TransitStop};
 export type Maneuver = { kind: 'depart' | 'continue' | 'left' | 'right' | 'arrive';
   roadName: string; distanceM: number };
 export type RouteResult = {
   status: 'ok'; edgeIds: string[]; roadNames: string[]; geometry: XYZ[]; distanceM: number;
   durationSeconds: number | null; durationModel: string | null;
-  costProfile: RoutingProfile; cost: number; costUnit: 'meter' | 'preference-meter';
+  costProfile: RoutingProfile; cost: number; costUnit: 'meter' | 'preference-meter' | 'seconds';
   costConfigId?: TransitPreference;
   traversals: {edgeId: string; fromFraction: number; toFraction: number}[];
   quality: Record<string, string>; warningCodes: string[]; maneuvers: Maneuver[];

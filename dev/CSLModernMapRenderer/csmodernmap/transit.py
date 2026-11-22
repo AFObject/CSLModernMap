@@ -198,9 +198,13 @@ TYPE_REGISTRY: Dict[str, TransitLineType] = {
 }
 
 
+_TYPE_KEYS_BY_CASE = {key.casefold(): key for key in _TYPE_ALIASES}
+
+
 def normalize_type(raw: str) -> Optional[str]:
     """Mod 导出的 TransportType → 注册表键；未知类型返回 None。"""
-    return _TYPE_ALIASES.get(raw or "")
+    key = _TYPE_KEYS_BY_CASE.get((raw or "").casefold())
+    return _TYPE_ALIASES.get(key)
 
 
 def type_def(key: str) -> Optional[TransitLineType]:

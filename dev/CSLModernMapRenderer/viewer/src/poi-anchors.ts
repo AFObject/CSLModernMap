@@ -10,7 +10,9 @@ export function stationAnchors(features: PointFeature[], stations: PointFeature[
     const station = feature.properties.sourceKind === 'stop'
       ? byStop.get(Number(feature.properties.sourceId)) : undefined;
     if (!station) return feature;
-    return {...feature, properties: {...feature.properties, name: station.properties.name, stationAnchor: true},
+    const name = String(station.properties.name ?? '').trim();
+    return {...feature, properties: {...feature.properties,
+      ...(name && {name, nameSource: station.properties.nameSource}), stationAnchor: true},
       geometry: station.geometry};
   });
 }

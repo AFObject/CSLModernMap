@@ -172,6 +172,36 @@ def _payload_from_bundle(bundle, progress=None, *, include_navigation=True, visi
     elif manifest.get("navigation"):
         navigation = bundle.navigation_payload()
         if navigation is not None:
+            # Use the exact station objects displayed by this scene, including merged platforms.
+            from math import dist
+            from .services.navigation import _digest
+            navigation = copy.deepcopy(navigation)
+            transit = navigation["transit"]
+            station_objects = transit["stationObjects"]
+            for station in sources.get("stations.geojson", {}).get("features", []):
+                props = station["properties"]
+                owner = str(props["stationId"])
+                members = [str(x) for x in props["memberStopIds"] if "stop:"+str(x) in transit["nodes"]]
+                if not members:
+                    continue
+                lon, lat = station["geometry"]["coordinates"]
+                center = [lat*111195, 0, -lon*111195]
+                center[1] = sum(transit["nodes"]["stop:"+m][1] for m in members)/len(members)
+                hub = "facility:"+owner
+                transit["nodes"][hub] = center
+                station_objects[owner] = {"platforms": members, "rings": [], "center": center}
+                for member in members:
+                    stop = "stop:"+member
+                    ref = f"inside:{owner}:{member}"
+                    end = transit["nodes"][stop]
+                    transit["geometries"][ref] = [center, end]
+                    for reverse, a, b in ((False, hub, stop), (True, stop, hub)):
+                        transit["edges"].append(dict(id=ref+(":b" if reverse else ":f"), sourceSegmentId=ref,
+                            geometryRef=ref, reverse=reverse, fromNode=a, toNode=b, lengthM=dist(center,end),
+                            mode="ACCESS", modeAccess="allowed", directionEvidence="shared-station-object",
+                            stationObject=owner, name=props.get("name", ""), level=""))
+            navigation["graphRevision"] = _digest([navigation["graphRevision"], station_objects])
+            navigation["snapshotId"] = _digest([navigation["snapshotId"], navigation["graphRevision"]])
             sources["navigation.json"] = navigation
     embedded = {
         "sources": sources, "images": images, "fonts": fonts,

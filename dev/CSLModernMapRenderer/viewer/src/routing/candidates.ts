@@ -25,12 +25,20 @@ function itinerarySignature(route: RouteResult): string {
       leg.toStopRef ? [leg.toStopRef.stopId, leg.toStopRef.stopIndex] : null]));
 }
 
+export function transitFactor(edge: Edge, cost: TransitCost): number {
+  if (edge.stationObject) return 0;
+  if (edge.mode !== 'RIDE') return cost.walkFactor;
+  if (edge.transitKind === 'TRAIN') return 0.7;
+  return edge.transitKind === 'BUS' ? 2 : 1;
+}
+
 export function transitScore(route: RouteResult, edges: Map<string, Edge>, cost: TransitCost): number {
-  let total = 0, previous: Edge | undefined;
+  let total = 0, boarded = false, previous: Edge | undefined;
   for (const part of route.traversals) {
     const edge = edges.get(part.edgeId)!;
-    total += (part.toFraction-part.fromFraction)*edge.lengthM*(edge.mode === 'RIDE' ? 1 : cost.walkFactor)
-      + (isBoarding(previous, edge) ? cost.boardingCost : 0);
+    total += (part.toFraction-part.fromFraction)*edge.lengthM*transitFactor(edge, cost)
+      + (boarded && isBoarding(previous, edge) ? cost.boardingCost : 0);
+    boarded ||= edge.mode === "RIDE";
     previous = edge;
   }
   return total;
@@ -41,25 +49,26 @@ export function compareCandidates(a: TransitCandidate, b: TransitCandidate, pref
     : preference === 'fewer-transfers' ? a.boardings!-b.boardings! : 0;
   if (first) return first;
   const metrics = a.balancedCost-b.balancedCost || a.walkingDistanceM!-b.walkingDistanceM!
-    || a.boardings!-b.boardings! || a.distanceM-b.distanceM;
+    || a.boardings!-b.boardings!;
   if (metrics) return metrics;
   const left = trajectorySignature(a), right = trajectorySignature(b);
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-export async function transitCandidates(results: Array<{route: RouteResult; preference: TransitPreference}>,
+export async function transitCandidates(results: Array<{route: RouteResult; preference?: TransitPreference}>,
   graphRevision: string, edges: Map<string, Edge>, balanced: TransitCost): Promise<TransitCandidate[]> {
   const exact = new Map<string, TransitCandidate>();
   for (const {route, preference} of results) {
     const signature = trajectorySignature(route), previous = exact.get(signature);
-    if (previous) { previous.generatedBy.push(preference); continue; }
+    if (previous) { if (preference) previous.generatedBy.push(preference); continue; }
     exact.set(signature, {...route, candidateId: await candidateId(graphRevision, signature),
-      generatedBy: [preference], balancedCost: transitScore(route, edges, balanced)});
+      generatedBy: preference ? [preference] : [], balancedCost: route.durationSeconds ?? transitScore(route, edges, balanced)});
   }
   const itineraries = new Set<string>();
-  return [...exact.values()].sort(compareCandidates).filter(route => {
+  const rank = (c: TransitCandidate) => c.generatedBy.includes('balanced') ? 0 : c.generatedBy.includes('less-walking') ? 1 : 2;
+  return [...exact.values()].sort((a,b) => rank(a)-rank(b) || compareCandidates(a,b)).filter(route => {
     const signature = itinerarySignature(route);
     if (itineraries.has(signature)) return false;
     itineraries.add(signature); return true;
-  });
+  }).slice(0,5);
 }

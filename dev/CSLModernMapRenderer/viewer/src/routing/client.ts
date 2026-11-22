@@ -64,7 +64,7 @@ export class RoutingClient {
   async candidates(origin: Snap, destination: Snap): Promise<TransitCandidate[]> {
     await this.initialize();
     // 一次请求覆盖整组三次查询，沿用 send 的 5 秒总预算。
-    return await this.send('transitCandidatesQuery', {origin, destination}) as TransitCandidate[];
+    return await this.send('transitCandidatesQuery', {origin, destination}, 20000) as TransitCandidate[];
   }
 
   stop(error = new RoutingError('CANCELLED')): void {

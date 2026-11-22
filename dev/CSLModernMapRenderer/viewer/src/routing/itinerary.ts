@@ -5,7 +5,7 @@ export function isBoarding(from: Edge | undefined, to: Edge): boolean {
     && from.routeId === to.routeId && from.toStopIndex === to.fromStopIndex);
 }
 
-export function itinerary(data: NavigationPackage, traversals: RouteResult['traversals']) {
+export function itinerary(data: Pick<NavigationPackage, 'edges' | 'nodes'>, traversals: RouteResult['traversals']) {
   const edges = new Map(data.edges.map(edge => [edge.id, edge]));
   const legs: TransitLeg[] = [];
   let previous: Edge | undefined, boardings = 0, walkingDistanceM = 0;
@@ -16,9 +16,11 @@ export function itinerary(data: NavigationPackage, traversals: RouteResult['trav
   };
   traversals.forEach((part, index) => {
     const edge = edges.get(part.edgeId)!, boarding = isBoarding(previous, edge);
+    if (edge.stationObject) { previous = edge; return; }
     if (boarding) boardings++;
     const mode = edge.mode === 'RIDE' ? 'ride' : 'walk';
     const length = (part.toFraction-part.fromFraction)*edge.lengthM;
+    if (mode === 'walk' && length < .01) { previous = edge; return; }
     if (mode === 'walk') walkingDistanceM += length;
     let leg = legs.at(-1);
     if (leg && leg.mode === mode && !boarding) {

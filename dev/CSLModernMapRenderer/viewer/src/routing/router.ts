@@ -1,8 +1,9 @@
+import {TimePlanner} from './time-planner';
 import createGraph from 'ngraph.graph';
 import {aStar} from 'ngraph.path';
 import Flatbush from 'flatbush';
 import {isBoarding, itinerary} from './itinerary';
-import {transitCandidates} from './candidates';
+import {transitCandidates, transitFactor, transitScore} from './candidates';
 import {cumulative, distance, planarDistance, pointAt, slice} from './geometry';
 import {RoutingError} from './types';
 import type {Edge, Maneuver, NavigationPackage, RouteResult, RoutingProfile, Snap, TransitCandidate, TransitCost, TransitPreference, XYZ} from './types';
@@ -13,6 +14,15 @@ type Segment = {ref: string; index: number};
 const START = '@origin', GOAL = '@destination';
 const DURATION_WAIT_FACTOR = 1.3;
 const finitePoint = (p: unknown): p is XYZ => Array.isArray(p) && p.length === 3 && p.every(Number.isFinite);
+
+function containsPosition(ring: number[][], [x,,z]: XYZ): boolean {
+        let inside = false;
+        for (let i=0,j=ring.length-1; i<ring.length; j=i++) {
+          const [ax,az]=ring[i], [bx,bz]=ring[j];
+          if ((az>z)!==(bz>z) && x<(bx-ax)*(z-az)/(bz-az)+ax) inside=!inside;
+        }
+        return inside;
+}
 
 export class Router {
   readonly graph = createGraph<State, Cost>();
@@ -29,6 +39,11 @@ export class Router {
   private profile: RoutingProfile = 'car-shortest';
   private minimumCostPerMeter = 1;
   private transitRouter?: Router;
+  private planner?: TimePlanner;
+  private avoidLine?: string;
+  private metroObjects: NonNullable<NavigationPackage['stationObjects']>[string][] = [];
+  private metroPlatforms: XYZ[] = [];
+  private preferenceMargin = 1;
   private transitCost!: TransitCost;
   private costConfigId?: TransitPreference;
 
@@ -44,16 +59,26 @@ export class Router {
     }
   }
 
+  private initialState(edge: Edge): string {
+    return this.transitNetwork && edge.mode !== 'RIDE' ? '@before:'+edge.id : edge.id;
+  }
+
   private boardingCost(from: Edge | undefined, to: Edge): number {
-    return this.transitNetwork && isBoarding(from, to) ? this.transitCost.boardingCost : 0;
+    return this.transitNetwork && isBoarding(from, to) ? this.transitCost.boardingCost + (this.costConfigId === 'fewer-transfers' ? this.preferenceMargin : 0) : 0;
   }
 
   private edgeCost(edge: Edge): number {
-    return edge.lengthM * (this.transitNetwork ? edge.mode === 'RIDE' ? 1 : this.transitCost.walkFactor
+    return (this.avoidLine && edge.lineId === this.avoidLine ? this.preferenceMargin : 0) + edge.lengthM * (this.transitNetwork ? transitFactor(edge, this.transitCost) + (this.costConfigId === 'less-walking' && edge.mode !== 'RIDE' && !edge.stationObject ? 10 : 0)
       : this.profile === 'car-balanced' ? edge.recommendedCostPerMeter ?? 1 : 1);
   }
 
   constructor(readonly data: NavigationPackage, private readonly transitNetwork = false) {
+    if (!transitNetwork && data.transit) {
+      const t = data.transit;
+      const stops = new Set(t.edges.filter(e => e.transitKind === 'METRO').flatMap(e => [e.fromNode, e.toNode]));
+      this.metroPlatforms = [...stops].map(id => t.nodes[id]);
+      this.metroObjects = Object.values(t.stationObjects ?? {}).filter(o => o.platforms.some(id => stops.has('stop:'+id)));
+    }
     if (transitNetwork) {
       const model = data.costModel;
       const valid = (cost: TransitCost | undefined, legacy = false) => cost
@@ -115,6 +140,8 @@ export class Router {
         values.push(edge); directory.set(key, values);
       }
       this.graph.addNode(edge.id, {position: to});
+      if (this.transitNetwork && edge.mode !== 'RIDE') this.graph.addNode(this.initialState(edge), {position: to});
+      if (this.transitNetwork) this.preferenceMargin += edge.lengthM * 10 + 300;
     }
     let transitionCount = 0;
     for (const edge of data.edges) {
@@ -126,13 +153,18 @@ export class Router {
     const visitVirtualLinks = this.graph.forEachLinkedNode;
     // A* 只枚举当前到达方向的转移，避免常驻每个路口的入度×出度对象。
     this.graph.forEachLinkedNode = (id, visit, oriented) => {
-      const edge = this.edges.get(String(id));
+      const before = String(id).startsWith('@before:');
+      const realId = before ? String(id).slice(8) : String(id);
+      const edge = this.edges.get(realId);
       if (edge) for (const next of this.outgoing.get(edge.toNode) ?? []) {
-        if (this.turnAllowed(edge, next)) visit(this.graph.getNode(next.id)!, {
-          id: `${edge.id}>${next.id}`, fromId: edge.id, toId: next.id, data: {cost: this.edgeCost(next)+this.boardingCost(edge, next)},
+        if (this.turnAllowed(edge, next)) visit(this.graph.getNode(before ? this.initialState(next) : next.id)!, {
+          id: `${edge.id}>${next.id}`, fromId: id, toId: before ? this.initialState(next) : next.id, data: {cost: this.edgeCost(next)+(before ? 0 : this.boardingCost(edge, next))},
         });
       }
-      visitVirtualLinks(id, visit, oriented);
+      if (before) visitVirtualLinks(realId, (node, link) => {
+        if (String(node.id).startsWith('@terminal:')) visit(node, {...link, fromId: id});
+      }, oriented);
+      else visitVirtualLinks(id, visit, oriented);
     };
     this.graph.endUpdate();
     this.exactNodeGeometry = exactNodeGeometry;
@@ -168,7 +200,22 @@ export class Router {
     if (!this.transitNetwork) return this.transit().candidates(origin, destination);
     const preferences: TransitPreference[] = this.data.costModel!.id === 'transit-roads-v2'
       ? ['balanced', 'less-walking', 'fewer-transfers'] : ['balanced'];
-    const results = preferences.map(preference => ({preference, route: this.route(origin, destination, false, 'transit', preference)}));
+    const results: {preference?: TransitPreference; route: RouteResult}[] = preferences.map(preference => ({preference, route: this.route(origin, destination, false, 'transit', preference)}));
+    const tried = new Set<string>();
+    // Replan around individual lines in the best itineraries to find distinct alternatives.
+    try {
+      for (let i=0; i<results.length && tried.size<8; i++) {
+        for (const leg of results[i].route.legs ?? []) {
+          if (!leg.lineId || tried.has(leg.lineId) || tried.size>=8) continue;
+          tried.add(leg.lineId); this.avoidLine = leg.lineId;
+          let route: RouteResult;
+          try { route=this.route(origin,destination,false,'transit','balanced'); }
+          catch(error) { if(error instanceof RoutingError && error.code==='NO_PATH')continue; throw error; }
+          if(route.durationSeconds! > results[0].route.durationSeconds! + 300) continue;
+          if (route.boardings && !route.legs?.some(other => other.lineId === this.avoidLine)) results.push({route});
+        }
+      }
+    } finally { this.avoidLine = undefined; }
     this.setTransitCost('balanced');
     return transitCandidates(results, this.data.graphRevision, this.edges, this.transitCost);
   }
@@ -176,11 +223,38 @@ export class Router {
   snap(position: XYZ, profile: RoutingProfile = 'car-shortest'): Snap[] {
     if (profile === 'transit' && !this.transitNetwork) return this.transit().snap(position);
     if (!finitePoint(position)) throw new RoutingError('INVALID_ENDPOINT');
+    if (this.transitNetwork) {
+      const matches = Object.entries(this.data.stationObjects ?? {}).filter(([,o]) => o.rings.some(ring => containsPosition(ring, position)));
+      const exact = Object.values(this.data.stationObjects ?? {}).flatMap(o => o.platforms).find(id =>
+        planarDistance(position, this.data.nodes['stop:'+id]) < 0.01);
+      const stationCenter = Object.entries(this.data.stationObjects ?? {}).find(([,o]) =>
+        o.center && planarDistance(position, o.center) < .01);
+      const match = stationCenter ?? (exact ? Object.entries(this.data.stationObjects!).find(([,o]) => o.platforms.includes(exact)) :
+        matches.length === 1 ? matches[0] : undefined);
+      if (match) {
+        const [owner,o] = match;
+        const platform = !stationCenter && exact && o.platforms.includes(exact) ? exact : undefined;
+        const ref = 'inside:'+owner+':'+(platform ?? o.platforms[0]);
+        return [{geometryRef:ref, fraction:platform ? 1 : 0, position: this.data.geometries[ref][platform ? 1 : 0],
+          distanceM:0, name:'站内', mode:'ACCESS', direction:'both'}];
+      }
+      // An ungrouped platform still represents the same object when selected exactly.
+      for (const [id, p] of Object.entries(this.data.nodes)) {
+        if (!id.startsWith('stop:') || planarDistance(position,p) >= 0.01) continue;
+        const ref = 'access:'+id.slice(5);
+        if (this.byGeometry.has(ref)) return [{geometryRef:ref, fraction:1, position:p, distanceM:0, name:'站点', mode:'ACCESS', direction:'both'}];
+      }
+    }
     if (!this.index) throw new RoutingError('DATA_INCOMPLETE');
+    const metroEndpoint = !this.transitNetwork && (
+      this.metroPlatforms.some(p => planarDistance(p,position) < .01) ||
+      this.metroObjects.some(o => (o.center && planarDistance(o.center,position) < .01) ||
+        o.rings.some(ring => containsPosition(ring,position))));
     const candidates = new Map<string, Snap>();
     for (const radius of [30, 100, 300]) {
       for (const id of this.index.search(position[0]-radius, position[2]-radius, position[0]+radius, position[2]+radius)) {
         const {ref, index} = this.segments[id];
+        if (metroEndpoint && this.byGeometry.get(ref)![0].level === 'HIGHWAY') continue;
         const points = this.data.geometries[ref], a = points[index-1], b = points[index];
         const dx = b[0]-a[0], dz = b[2]-a[2], squared = dx*dx+dz*dz;
         const t = squared > 0 ? Math.max(0, Math.min(1, ((position[0]-a[0])*dx+(position[2]-a[2])*dz)/squared)) : 0;
@@ -212,7 +286,42 @@ export class Router {
     for (const snap of [origin, destination]) {
       if (!this.byGeometry.has(snap.geometryRef) || !Number.isFinite(snap.fraction) || snap.fraction < 0 || snap.fraction > 1)
         throw new RoutingError('INVALID_ENDPOINT');
-      if (this.transitNetwork && this.byGeometry.get(snap.geometryRef)![0].mode !== 'WALK') throw new RoutingError('INVALID_ENDPOINT');
+      if (this.transitNetwork && this.byGeometry.get(snap.geometryRef)![0].mode === 'RIDE') throw new RoutingError('INVALID_ENDPOINT');
+    }
+    if (profile === 'transit') {
+      this.planner ??= new TimePlanner(this.data);
+      const plan=this.planner.solve(origin,destination,costConfigId ?? 'balanced',this.avoidLine);
+      const result=this.result(plan.steps,[origin.position,destination.position]);
+      result.durationSeconds=plan.seconds; result.durationModel='cs1-transit-time-v1';
+      result.cost=plan.seconds; result.costUnit='seconds'; result.quality.duration='cs1-transit-time-v1';
+      const legs = result.legs!;
+      const timings = new Map(plan.rideTimings.map(timing => [timing.traversalStart, timing]));
+      for (const [index, leg] of legs.entries()) {
+        const timing = leg.mode === 'ride' && timings.get(leg.traversalStart);
+        if (!timing) continue;
+        leg.stopSequence?.forEach((stop, i) => { stop.elapsedSeconds = timing.stopSeconds[i]; });
+        if (!timing.transfer) continue;
+        leg.transfer = timing.transfer;
+        const previous = legs[index-1];
+        const walk = previous?.walkKind === 'transfer' ? previous : undefined;
+        const change = timing.transfer.walkingDistanceM - (walk?.distanceM ?? 0);
+        result.walkingDistanceM! += change;
+        result.distanceM += change;
+        if (walk) walk.distanceM = timing.transfer.walkingDistanceM;
+      }
+      for(const [i,snap] of [origin,destination].entries()){
+        if(!snap.distanceM) continue;
+        result.distanceM+=snap.distanceM; result.walkingDistanceM!+=snap.distanceM;
+        const leg=i ? legs.at(-1) : legs[0];
+        if(leg?.mode==='walk') leg.distanceM+=snap.distanceM;
+        else {
+          const idx=i ? plan.steps.length : 0;
+          const access={mode:'walk' as const,name:'',stops:0,distanceM:snap.distanceM,traversalStart:idx,traversalEnd:idx,
+            walkKind:i ? 'egress' as const : 'access' as const};
+          if(i)legs.push(access);else legs.unshift(access);
+        }
+      }
+      return result;
     }
     const startEdges = this.byGeometry.get(origin.geometryRef)!;
     const endEdges = this.byGeometry.get(destination.geometryRef)!;
@@ -232,7 +341,7 @@ export class Router {
     try {
       for (const edge of startEdges) {
         const fraction = edge.reverse ? 1-origin.fraction : origin.fraction;
-        this.graph.addLink(START, edge.id, {cost: (1-fraction)*this.edgeCost(edge)});
+        this.graph.addLink(START, this.initialState(edge), {cost: (1-fraction)*this.edgeCost(edge)});
         initial.set(edge.id, fraction);
       }
       for (const edge of endEdges) {
@@ -262,19 +371,19 @@ export class Router {
       for (const edge of startEdges) {
         if (initial.get(edge.id) !== 0) continue;
         for (const outgoing of this.outgoing.get(edge.fromNode) ?? []) {
-          this.graph.addLink(START, outgoing.id, {cost: this.edgeCost(outgoing)+this.boardingCost(undefined, outgoing)});
+          this.graph.addLink(START, this.initialState(outgoing), {cost: this.edgeCost(outgoing)});
           initial.set(outgoing.id, 0);
         }
       }
       const lowerBound = this.profile === 'car-balanced' ? this.minimumCostPerMeter : 1;
       const finder = aStar(this.graph, {oriented: true, distance: (_a, _b, link) => link.data.cost,
-        heuristic: (a, b) => this.exactNodeGeometry ? planarDistance(a.data.position, b.data.position)*lowerBound : 0});
+        heuristic: (a, b) => !this.transitNetwork && this.exactNodeGeometry ? planarDistance(a.data.position, b.data.position)*lowerBound : 0});
       const path = finder.find(START, GOAL).reverse();
       if (!path.length) throw new RoutingError('NO_PATH');
       const traversals: RouteResult['traversals'] = [];
       for (let index = 1; index < path.length-1; index++) {
         const id = String(path[index].id), terminal = id.startsWith('@terminal:');
-        const edgeId = terminal ? id.slice('@terminal:'.length) : id;
+        const edgeId = terminal ? id.slice('@terminal:'.length) : id.replace(/^@before:/, '');
         const from = index === 1 ? initial.get(edgeId) ?? 0 : 0;
         const to = terminal ? final.get(id)! : 1;
         if (to-from > 1e-10) traversals.push({edgeId, fromFraction: from, toFraction: to});
@@ -337,6 +446,7 @@ export class Router {
     if (durationSeconds !== null && trafficDuration) durationSeconds *= DURATION_WAIT_FACTOR;
     maneuvers.push({kind: 'arrive', roadName: '', distanceM: 0});
     if (geometry.length === 1) geometry.push(geometry[0]);
+    if (this.transitNetwork) cost = transitScore({traversals} as RouteResult, this.edges, this.transitCost);
     return {status: 'ok', costProfile: this.profile, cost, durationSeconds, durationModel, roadNames: [...roadNames],
       ...trip,
       ...(this.costConfigId ? {costConfigId: this.costConfigId} : {}),

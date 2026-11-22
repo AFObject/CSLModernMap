@@ -15,39 +15,30 @@ def effective_sequence(route_or_ids: Route | list[int] | tuple[int, ...]) -> tup
     return tuple(topology.sequence)
 
 
-def _stop_line_graph(mapdata: MapData, keyword: str) -> dict[int, set[int]]:
-    graph: dict[int, set[int]] = {}
-    wanted = (keyword or "").lower()
-    for segment in mapdata.segments:
-        if wanted not in (segment.name or "").lower():
-            continue
-        if segment.start_node_id == segment.end_node_id:
-            continue
-        graph.setdefault(segment.start_node_id, set()).add(segment.end_node_id)
-        graph.setdefault(segment.end_node_id, set()).add(segment.start_node_id)
-    return graph
-
-
 def has_stop_line_closure(mapdata: MapData, stop_node_ids, kind: TransitKind | str) -> bool:
+    """Accept an explicit final-to-first stop-line, including two-stop shuttles."""
+    if len(stop_node_ids) < 2:
+        return False
+    first, last = int(stop_node_ids[0]), int(stop_node_ids[-1])
+    if mapdata.node(first) is None or mapdata.node(last) is None:
+        return False
+    if first == last:
+        return True
     definition = type_def(normalize_transit_kind(kind).value)
     if definition is None or not definition.line_network:
         return False
-    stops = [int(item) for item in stop_node_ids if mapdata.node(int(item)) is not None]
-    if len(stops) < 3:
-        return False
-    if stops[0] == stops[-1]:
-        return True
-    graph = _stop_line_graph(mapdata, definition.line_network)
-    return stops[-1] in graph.get(stops[0], set())
+    wanted = definition.line_network.casefold()
+    return any(
+        segment.start_node_id == last
+        and segment.end_node_id == first
+        and (segment.name or "").strip().casefold() == wanted
+        for segment in mapdata.segments
+    )
 
 
 def is_loop_route(mapdata: MapData, transport: Transport,
                   kind: TransitKind | str | None = None) -> bool:
     stops = [item.node_id for item in transport.stops]
-    if len(stops) < 3:
-        return False
-    if stops[0] == stops[-1]:
-        return True
     return has_stop_line_closure(mapdata, stops, kind or transport.type)
 
 

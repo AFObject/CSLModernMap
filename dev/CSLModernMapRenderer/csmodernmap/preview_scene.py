@@ -933,7 +933,7 @@ def _compile_poi_atlas(root, cfg, keys, *, diagnostics=None):
         for status in ("hidden", "empty"):
             diagnostics.setdefault(status, []).extend(key for key, value in statuses.items() if value == status)
     keys = sorted(keys - hidden_keys)
-    side, columns = 48, 16
+    side, columns = 56, 16
     atlas = Image.new("RGBA", (columns*side, max(1, (len(keys)+columns-1)//columns)*side))
     index = {}
     colors = {}
@@ -955,22 +955,25 @@ def _compile_poi_atlas(root, cfg, keys, *, diagnostics=None):
         if luminance > 200:
             rgb = tuple(max(0, int(value * .7)) for value in rgb)
         colors[key] = "#%02X%02X%02X" % rgb
-        icon = ImageOps.contain(icon,
-                                (side-4, side-4), Image.Resampling.LANCZOS)
+        icon = ImageOps.contain(icon, (44, 44), Image.Resampling.LANCZOS)
+        tile = Image.new("RGBA", (side, side))
+        tile.paste(icon, ((side-icon.width)//2, (side-icon.height)//2))
+        icon_alpha = tile.getchannel("A")
+        shadow_mask = Image.new("L", tile.size)
+        shadow_mask.paste(icon_alpha, (0, 2))
+        shadow = Image.new("RGBA", tile.size, (38, 48, 62))
+        shadow.putalpha(shadow_mask.filter(ImageFilter.GaussianBlur(2)).point(lambda alpha: round(alpha*.24)))
         if not layer.icon_map.get_icon(key).get('borderless', False):
-            # 光晕随图稿切换，保持深色图标的灰色外缘。
-            icon = icon.convert("RGBA")
-            icon_alpha = icon.getchannel("A")
-            halo = icon_alpha.filter(ImageFilter.MaxFilter(5))
             halo_rgb = (115, 119, 128) if cfg.get("appearance") == "dark" else (255, 255, 255)
-            halo_layer = Image.new("RGBA", icon.size, (*halo_rgb, 220))
-            halo_layer.putalpha(halo)
-            outlined = Image.new("RGBA", icon.size, (0, 0, 0, 0))
-            outlined.alpha_composite(halo_layer)
-            outlined.alpha_composite(icon)
-            icon = outlined
+            halo_layer = Image.new("RGBA", tile.size, halo_rgb)
+            # Blend adjacent pixel radii for a fractional outline at full icon size.
+            halo_mask = Image.blend(icon_alpha.filter(ImageFilter.MaxFilter(3)),
+                                    icon_alpha.filter(ImageFilter.MaxFilter(5)), .536)
+            halo_layer.putalpha(halo_mask)
+            shadow.alpha_composite(halo_layer)
+        shadow.alpha_composite(tile)
         x, y = (n % columns)*side, (n // columns)*side
-        atlas.paste(icon, (x+(side-icon.width)//2, y+(side-icon.height)//2))
+        atlas.paste(shadow, (x, y))
         index[key] = {"x": x, "y": y, "width": side, "height": side, "pixelRatio": 2}
     atlas.save(root / "poi-sprite.png")
     (root / "poi-sprite.json").write_bytes(_json_bytes(index))
@@ -991,7 +994,8 @@ def _apply_poi_density(features, cfg):
         items = []
         for feature in features:
             props = feature["properties"]
-            if (zoom < props["minZoom"]
+            if (not props["name"].strip() or props.get("nameSource") == "category"
+                    or zoom < props["minZoom"]
                     or props.get("iconStatus") in {"missing", "hidden", "empty", "orphan"}):
                 continue
             lng, lat = feature["geometry"]["coordinates"]
@@ -1038,6 +1042,64 @@ def _write_geojson(root: Path, name: str, features: list[dict],
         recorder.set_counter(f"source.{name}.features", len(features))
         recorder.set_counter(f"source.{name}.bytes", len(payload))
     sources[name] = f"{filename}?revision={revision}"
+
+
+def _rail_station_bodies(document, stations):
+    from .layers.railway_layer import RailwayLayer
+
+    station_by_stop = {str(ident): feature["properties"] for feature in stations
+                       for ident in feature["properties"]["memberStopIds"]}
+    rail_types = {"METRO": "metro", "RAIL": "train", "MONORAIL": "monorail"}
+    tracks = []
+    for track in document.networks:
+        kind = rail_types.get(str(track.kind))
+        if kind and len(track.geometry.points) >= 2 and (track.platform or RailwayLayer._is_station(track, kind)):
+            tracks.append((track, track.geometry.points, kind))
+    matches = {}
+
+    def distance_to_track(position, points):
+        nearest = float("inf")
+        for a, b in zip(points, points[1:]):
+            delta = (b.x-a.x, b.y-a.y, b.z-a.z)
+            relative = (position.x-a.x, position.y-a.y, position.z-a.z)
+            length_squared = sum(value*value for value in delta)
+            if not length_squared:
+                continue
+            offset = sum(x*y for x, y in zip(delta, relative))/length_squared
+            ratio = max(0, min(1, offset))
+            nearest = min(nearest, hypot(*(x-ratio*y for x, y in zip(relative, delta))))
+        return nearest
+
+    for stop in document.stops:
+        station = station_by_stop.get(str(stop.id))
+        kind = str(stop.kind).lower()
+        if station is None or kind not in rail_types.values():
+            continue
+        closest = min(((distance_to_track(stop.position, points), track.id)
+                       for track, points, track_kind in tracks if track_kind == kind),
+                      default=(float("inf"), None))
+        distance, track_id = closest
+        if distance <= 18 and (track_id not in matches or distance < matches[track_id][0]):
+            matches[track_id] = (distance, station)
+
+    bodies = []
+    for track, points, kind in tracks:
+        first, last = points[0], points[-1]
+        dx, dz = last.x-first.x, last.z-first.z
+        length = hypot(dx, dz)
+        if not length:
+            continue
+        half_width = length/14
+        side_x, side_z = -dz/length*half_width, dx/length*half_width
+        ring = [world_to_geo(point.x+sign*side_x, point.z+sign*side_z)
+                for point, sign in ((first, -1), (last, -1), (last, 1), (first, 1), (first, -1))]
+        distance, station = matches.get(track.id, (None, {}))
+        bodies.append(_feature(
+            f"rail-station-body:{track.id}", {"type": "Polygon", "coordinates": [ring]},
+            center=world_to_geo((first.x+last.x)/2, (first.z+last.z)/2),
+            railType=kind, stationId=station.get("stationId", ""), name=station.get("name", ""),
+            servingLineIds=station.get("servingLineIds", []), matchDistance=distance))
+    return bodies
 
 
 @measured("preview.builtArea.texture")
@@ -1176,6 +1238,7 @@ def preview_source_signatures(style, options):
         ],
     }
     dependencies["zones"] = dependencies["districts"]
+    dependencies["railStationBodies"] = ["rail-platform-body-v2", dependencies["stations"]]
     poi_icon_colors = {
         key: data.get("poi_icons", {}).get(key)
         for key in ("icons_dir", "appearance", "sprite", "icon_overrides")
@@ -1781,6 +1844,12 @@ class PreviewSceneCompiler:
                     geometryRole="station"))
             _write_geojson(root, "stations", stations, revision, sources)
 
+        if "railStationBodies" in options["changed"]:
+            stations_path = root / sources["stations"].split("?")[0]
+            stations = json.loads(stations_path.read_bytes())["features"]
+            bodies = _rail_station_bodies(document, stations)
+            _write_geojson(root, "railStationBodies", bodies, revision, sources)
+
         if "traffic" in options["changed"]:
             sources["traffic"] = f"traffic.geojson?revision={revision}"
 
@@ -1871,7 +1940,20 @@ class PreviewSceneCompiler:
                 override_path=options["style"].get("_poi_mapping_override"),
             ) if rebuild_transit else None
             from .services.poi.visibility import visible_pois, icon_visibility_dependencies
-            from .services.poi.ownership import poi_group_for, poi_visibility_group_for, sublayer_for
+            from .services.poi.ownership import TRANSIT_POI_KINDS, poi_group_for, poi_visibility_group_for, sublayer_for
+
+            def transport_class(item):
+                kind = str(item.kind).casefold()
+                building = names.buildings.get(int(item.source.id)) if item.source.kind == "building" else None
+                role = str(building.role) if building else ""
+                subservice = str(building.sub_service).casefold() if building else ""
+                if (kind in {"airport", "private_airport", "cs1::park:airport"}
+                        or role == "AIRPORT" or subservice == "publictransportplane"):
+                    return "airport"
+                if (sublayer_for(item) == "transit" or kind in TRANSIT_POI_KINDS
+                        or (role == "TRANSIT_STATION" and subservice != "publictransportpost")):
+                    return "transit"
+                return "other"
             poi_items = visible_pois(
                 poi_catalog, cfg, visibility_snapshot=visibility_snapshot,
                 include_hidden_icons=True) if rebuild_pois else ()
@@ -1926,7 +2008,7 @@ class PreviewSceneCompiler:
                     minZoom=(0. if owner == "transit" and not item.parent_poi_id else max(
                         8., log2(max(float(item.min_zoom), 1e-6)
                                  * 4096 / 17280 * 156543.03392804097))),
-                    owner=owner,
+                    owner=owner, transportClass=transport_class(item),
                     nameSource=selected_name.source,
                     iconStatus=("orphan" if item.kind not in catalog_kinds
                                 else "pending"),
@@ -1977,7 +2059,7 @@ class PreviewSceneCompiler:
                     priority=max(1000, int(item.priority)),
                     transitPriority=int(item.priority),
                     minZoom=transit_min_zoom,
-                    owner="transit", nameSource=selected_name.source,
+                    owner="transit", transportClass=transport_class(item), nameSource=selected_name.source,
                     iconStatus=("orphan" if item.kind not in transit_view_kinds
                                 else "pending"),
                     geometryRole="poi"))
