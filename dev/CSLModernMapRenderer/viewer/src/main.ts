@@ -15,6 +15,7 @@ import { NavigationControl, lineCapsule } from './routing/ui';
 import { controlIcon } from './control-icons';
 import { Preview3D, BUILDINGS_3D, CAMERA_TRANSITION_MS } from './preview-3d';
 import {scaledTransitWidth, transitWidthFactor} from './transit-scale';
+import {transitContrastText} from './transit-colors';
 import { PreviewControls } from './preview-controls';
 import {ArtworkView, type ArtworkDelivery, type ArtworkTool, type ArtworkObserveAction, type ArtworkPick} from './artwork-view';
 import { trafficColor as trafficColorExpression } from './traffic-paint';
@@ -832,13 +833,6 @@ function transitLabelStyle(): TransitLabelStyle {
   return merged as TransitLabelStyle;
 }
 
-function hexToRgb(hex: string): [number, number, number] {
-  const normalized = hex.startsWith('#') ? hex.slice(1) : hex;
-  if (normalized.length !== 6) return [0, 0, 0];
-  return [parseInt(normalized.slice(0, 2), 16),
-    parseInt(normalized.slice(2, 4), 16), parseInt(normalized.slice(4, 6), 16)];
-}
-
 /** 线路标签几何（已解析字号、内边距和轮廓宽度）。 */
 function transitBadgeMetrics() {
   const style = transitLabelStyle();
@@ -863,20 +857,12 @@ function transitBadgeMetrics() {
   };
 }
 
-function transitContrastText(hex: string): string {
-  const luminance = (rgb: number[]) => rgb.map(v => v / 255)
-    .map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4)
-    .reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i], 0);
-  const value = luminance(hexToRgb(hex)), dark = luminance(hexToRgb('#26352F'));
-  return (Math.max(value, dark) + .05) / (Math.min(value, dark) + .05) >= 1.05 / (value + .05)
-    ? '#26352F' : '#FFFFFF';
-}
-
 /** 创建和主题更新共用线路徽章样式。 */
 function paintTransitBadge(el: HTMLElement, color: string,
                            metrics = transitBadgeMetrics()): void {
   const {style, preset} = metrics;
   const name = el.dataset.routeName ?? el.textContent ?? '';
+  const textColor = preset.accent === 'fill' ? transitContrastText(color) : style.palette.text;
   el.dataset.preset = style.preset;
   // MapLibre 在同一元素上维护定位 transform，只清理标签自身的样式。
   for (const key of ['height', 'max-width', 'box-sizing', 'display', 'padding', 'box-shadow', 'overflow'])
@@ -895,7 +881,7 @@ function paintTransitBadge(el: HTMLElement, color: string,
   el.querySelector('.transit-badge-name')!.textContent = spaceMixedText(name);
   el.style.setProperty('--badge-color', color);
   el.style.setProperty('--badge-surface', style.palette.surface);
-  el.style.setProperty('--badge-text', preset.accent === 'fill' ? (name.toLowerCase() === 'central line' ? '#17202a' : '#fff') : style.palette.text);
+  el.style.setProperty('--badge-text', textColor);
   el.style.setProperty('--badge-border', preset.accent === 'frame' ? color : style.palette.border);
   el.style.setProperty('--badge-pad', `${metrics.padX}px`);
   el.style.setProperty('--badge-outline', `${metrics.outline}px`);
@@ -918,7 +904,7 @@ function paintTransitBadge(el: HTMLElement, color: string,
   el.style.fontWeight = String(style.fontWeight);
   el.style.fontFamily = labelFontFamily("line");
   el.style.background = preset.accent === 'fill' ? color : style.palette.surface;
-  el.style.color = preset.accent === 'fill' ? (name.toLowerCase() === 'central line' ? '#17202a' : '#fff') : style.palette.text;
+  el.style.color = textColor;
   el.style.borderColor = preset.accent === 'frame' ? color : style.palette.border;
   el.style.borderWidth = `${metrics.outline}px`;
   el.style.borderRadius = `${metrics.radius}px`;
@@ -2014,7 +2000,6 @@ function placeLabel(id: string, coordinates: [number, number], offset: [number, 
   const element = item.marker.getElement(); element.style.display = '';
   return element;
 }
-const TRAIN_STATION_COLOR = '#d87524';
 type DisplayLine = {id: number; name: string; color: string; kind: string; groupId?: number;
   geometry: GeoJSON.LineString | GeoJSON.MultiLineString};
 function findDisplayLines(includeHidden = false): Map<number, DisplayLine> {
@@ -2045,11 +2030,16 @@ function layoutRailStationSigns(bodies: RailStationBody[], kept: Set<string>, li
     const element = placeLabel(id, center, [0, 0], {group: 'rail-station-body', labelType: 'poi'});
     element.classList.add('metro-station-sign');
     if (body.properties.stationId) makeStationPickable(element, body.properties.stationId);
-    const servingLines = railType === 'train' ? [{name: 'Train', color: TRAIN_STATION_COLOR}]
-      : servingLineIds.flatMap(lineId => {
-        const line = lines.get(lineId);
-        return line?.kind === railType && line.name ? [line] : [];
-      });
+    const services = servingLineIds.flatMap(lineId => {
+      const line = lines.get(lineId);
+      return line?.kind === railType ? [line] : [];
+    });
+    const namedServices = new Map(services.filter(line => line.name.trim())
+      .map(line => [line.groupId ?? line.id, line]));
+    const servingLines: {name: string; color?: string}[] = [...namedServices.values()];
+    if (!servingLines.length && services.length) {
+      servingLines.push({name: i18n.t(`navigation_placeMode_${railType}`), color: services[0].color});
+    }
     const key = JSON.stringify([name, servingLines]);
     if (element.dataset.signContent === key) continue;
     element.dataset.signContent = key;

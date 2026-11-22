@@ -17,6 +17,7 @@ import {WALK_SECONDS_PER_METER} from './time-planner';
 import {inspectLine, type LineInspection} from './line-inspection';
 import {spaceMixedText} from '../text-spacing';
 import {scaledTransitWidth} from '../transit-scale';
+import {transitContrastText} from '../transit-colors';
 
 import type {TransitCandidate} from './types';
 import './ui.css';
@@ -66,7 +67,7 @@ export function lineCapsule(name: string, color = '#526071'): HTMLSpanElement {
   badge.className = 'navigation-line-capsule';
   badge.textContent = spaceMixedText(name);
   badge.style.backgroundColor = color;
-  badge.style.color = name.trim().toLowerCase() === 'central line' ? '#17202a' : '#fff';
+  badge.style.color = transitContrastText(color);
   return badge;
 }
 
