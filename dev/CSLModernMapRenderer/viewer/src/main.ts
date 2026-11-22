@@ -2042,7 +2042,6 @@ function layoutRailStationSigns(bodies: RailStationBody[], kept: Set<string>, li
     kept.add(id);
     const element = placeLabel(id, center, [0, 0], {group: 'rail-station-body', labelType: 'poi'});
     element.classList.add('metro-station-sign');
-    element.classList.toggle('metro-station-priority', railType === 'metro');
     if (body.properties.stationId) makeStationPickable(element, body.properties.stationId);
     const servingLines = railType === 'train' ? [{name: 'Train', color: TRAIN_STATION_COLOR}]
       : servingLineIds.flatMap(lineId => {
@@ -2205,13 +2204,15 @@ function makeStationPickable(element: HTMLElement, stationId: string): void {
 }
 
 function stationCrossing(group: StationDot[], center: Point): Point | null {
-  const railStations = group.filter(station => station.lines.some(isHeavyRail));
-  const lines = [...new Map(railStations.flatMap(station => station.lines.filter(isHeavyRail)).map(line => [line.id, line])).values()];
+  const hasHeavyRail = group.some(station => station.lines.some(isHeavyRail));
+  const eligible = hasHeavyRail ? isHeavyRail : (line: DisplayLine) => line.kind === 'monorail';
+  const stations = group.filter(station => station.lines.some(eligible));
+  const lines = [...new Map(stations.flatMap(station => station.lines.filter(eligible)).map(line => [line.id, line])).values()];
   if (lines.length !== 2 || (lines[0].groupId ?? lines[0].id) === (lines[1].groupId ?? lines[1].id)) return null;
-  if (railStations.length > 1) {
+  if (stations.length > 1) {
     const navigationData = EMBEDDED ? embeddedJson('navigation.json') as NavigationPackage | undefined : undefined;
     const sharedFacility = Object.values(navigationData?.transit?.stationObjects ?? {}).some(object =>
-      object.rings.length && lines.every(line => railStations.some(station =>
+      object.rings.length && lines.every(line => stations.some(station =>
         station.lines.includes(line) && station.stopIds.some(id => object.platforms.includes(String(id))))));
     if (!sharedFacility) return null;
   }
@@ -2272,7 +2273,6 @@ function layoutStationDots(kept: Set<string>, lines: Map<number, DisplayLine>, c
     element.classList.add('map-station-dot');
     element.classList.toggle('is-scale-dot', detail === 'dots');
     makeStationPickable(element, first.id);
-    element.classList.toggle('metro-station-priority', groupLines.some(line => line.kind === 'metro'));
     const key = JSON.stringify([name, interchange, color]);
     if (element.dataset.stationDot === key) continue;
     element.dataset.stationDot = key;
@@ -2340,6 +2340,7 @@ function layoutLabels(): void {
   const overlaps = (b: Box) => keys(b).some(k => (cells.get(k) ?? []).some(a => boxesOverlap(a, b)));
   const stationCaptionClearance: Box[] = [];
   const canvasRect = map.getCanvasContainer().getBoundingClientRect();
+  const {clientWidth: width, clientHeight: height} = map.getCanvas();
   const screenBox = (rect: DOMRect, pad = 0): Box => [
     rect.left - canvasRect.left - pad, rect.top - canvasRect.top - pad,
     rect.right - canvasRect.left + pad, rect.bottom - canvasRect.top + pad,
@@ -2348,23 +2349,26 @@ function layoutLabels(): void {
     .reduce((sum, a) => sum + Math.max(0, Math.min(b[2], a[2])-Math.max(b[0], a[0]))
       * Math.max(0, Math.min(b[3], a[3])-Math.max(b[1], a[1])), 0);
   const stationMarkers = [...kept].map(id => markers.get(id)!.marker.getElement());
-  const stationNames = stationMarkers.flatMap(element => {
-    const name = element.querySelector<HTMLElement>('.metro-station-name, .map-station-dot-label');
-    return name ? [{name, rect: name.getBoundingClientRect()}] : [];
-  }).sort((a, b) => a.rect.width - b.rect.width);
-  for (const {name, rect} of stationNames) {
-    const box = screenBox(rect, 2);
-    const collide = overlaps(box);
-    name.style.visibility = collide ? 'hidden' : '';
-    if (collide) continue;
-    reserve(box);
-    stationCaptionClearance.push(screenBox(rect, 10));
-  }
-  for (const element of stationMarkers) {
+  const stationCaptions = stationMarkers.flatMap(element => {
     reserve(screenBox(element.getBoundingClientRect()));
-    for (const badge of element.querySelectorAll('.metro-station-lines .navigation-line-capsule')) {
-      reserve(screenBox(badge.getBoundingClientRect(), 2));
-    }
+    const caption = element.querySelector<HTMLElement>('.metro-station-caption, .map-station-dot-label');
+    const name = caption?.querySelector('.metro-station-name') ?? caption;
+    return caption && name ? [{element, caption, nameWidth: name.getBoundingClientRect().width}] : [];
+  }).sort((a, b) => a.nameWidth - b.nameWidth);
+  const closeStations = stationDetail() === 'bodies';
+  const captionSides = closeStations ? ['right', 'top', 'bottom', 'left'] : ['right'];
+  for (const {element, caption} of stationCaptions) {
+    const placed = captionSides.some(side => {
+      caption.dataset.side = side;
+      const rect = caption.getBoundingClientRect();
+      const box = screenBox(rect, 2);
+      if (closeStations && (box[0] < 0 || box[1] < 0 || box[2] > width || box[3] > height)) return false;
+      if (overlaps(box)) return false;
+      reserve(box);
+      stationCaptionClearance.push(screenBox(rect, 10));
+      return true;
+    });
+    element.classList.toggle('station-caption-hidden', !placed);
   }
   const bounds = map.getBounds();
   if (localDetails && !navigation.transitFocus
@@ -2453,7 +2457,6 @@ function layoutLabels(): void {
       iconById.set(id, {feature, halfWidth: (box[2] - box[0]) / 2, moved});
     }
   };
-  const width = map.getCanvas().clientWidth, height = map.getCanvas().clientHeight;
   const sources = !showPois ? [] : overlay
     ? (currentManifest.layers.poi === false ? [] : mapPoiDisplayFeatures.filter((f: any) =>
         f.properties?.transportClass === 'airport' || (ordinary && f.properties?.owner !== 'transit')))

@@ -149,14 +149,15 @@ html, body, body *, body *::before, body *::after {
 .transit-route-focus .map-district-caption { display: none !important; }
 .navigation-focus :is(.metro-station-sign, .map-station-dot) { display: none !important; }
 .metro-station-sign { width: 20px; height: 20px; pointer-events: none; }
-.maplibregl-marker.metro-station-priority { z-index: 1; }
+.maplibregl-marker:is(.metro-station-sign, .map-station-dot) { z-index: 1; }
+.maplibregl-marker.station-caption-hidden { z-index: 0; }
 .maplibregl-marker.navigation-pin { z-index: 2; }
 .metro-station-icon {
   display: grid; place-items: center; width: 20px; height: 20px; border-radius: 5px;
   background: #50545a; color: #fff;
 }
 .metro-station-icon svg { width: 15px; height: 15px; }
-.metro-station-caption { position: absolute; top: 50%; left: 25px; transform: translateY(-50%); white-space: nowrap; }
+.metro-station-caption { --station-caption-gap: 5px; }
 .metro-station-name {
   display: block; width: fit-content; font-size: 13px; font-weight: 600; line-height: 1.25; color: #354153;
   -webkit-text-stroke: 1.6px #fff; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(38, 48, 62, .23);
@@ -172,10 +173,23 @@ html, body, body *, body *::before, body *::after {
 .map-station-dot.is-interchange { width: 8px; height: 8px; background: #fff; border: 1.5px solid #46515c; }
 .map-station-dot.is-interchange.is-scale-dot { border-width: 1.2px; }
 .map-station-dot-label {
-  position: absolute; top: 50%; left: 100%; margin-left: 4px; transform: translateY(-50%);
-  white-space: nowrap; color: #354153; font-size: 11px; font-weight: 600;
+  --station-caption-gap: 4px; color: #354153; font-size: 11px; font-weight: 600;
   -webkit-text-stroke: 1.4px #fff; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(38, 48, 62, .20);
 }
+:is(.metro-station-caption, .map-station-dot-label) {
+  position: absolute; top: 50%; left: calc(100% + var(--station-caption-gap));
+  transform: translateY(-50%); width: max-content; white-space: nowrap;
+}
+:is(.metro-station-caption, .map-station-dot-label)[data-side="top"] {
+  top: auto; bottom: calc(100% + var(--station-caption-gap)); left: 50%; transform: translateX(-50%);
+}
+:is(.metro-station-caption, .map-station-dot-label)[data-side="bottom"] {
+  top: calc(100% + var(--station-caption-gap)); left: 50%; transform: translateX(-50%);
+}
+:is(.metro-station-caption, .map-station-dot-label)[data-side="left"] {
+  left: auto; right: calc(100% + var(--station-caption-gap));
+}
+.station-caption-hidden :is(.metro-station-caption, .map-station-dot-label) { visibility: hidden; }
 .maplibregl-marker.station-pickable, .maplibregl-marker.map-poi-pickable { pointer-events: auto; cursor: pointer; }
 .map-poi-offset-icon canvas { display: block; width: 100%; height: 100%; }
 .poi-layout-pending .map-poi-pickable { visibility: hidden; }
