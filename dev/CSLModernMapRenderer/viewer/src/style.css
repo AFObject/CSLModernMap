@@ -158,7 +158,7 @@ html, body, body *, body *::before, body *::after {
 .metro-station-icon svg { width: 15px; height: 15px; }
 .metro-station-caption { position: absolute; top: 50%; left: 25px; transform: translateY(-50%); white-space: nowrap; }
 .metro-station-name {
-  display: block; font-size: 13px; font-weight: 600; line-height: 1.25; color: #354153;
+  display: block; width: fit-content; font-size: 13px; font-weight: 600; line-height: 1.25; color: #354153;
   -webkit-text-stroke: 1.6px #fff; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(38, 48, 62, .23);
 }
 .metro-station-lines { display: flex; gap: 4px; margin-top: 2px; font-size: 10px; }
@@ -177,4 +177,5 @@ html, body, body *, body *::before, body *::after {
   -webkit-text-stroke: 1.4px #fff; paint-order: stroke fill; text-shadow: 0 1px 2px rgba(38, 48, 62, .20);
 }
 .maplibregl-marker.station-pickable, .maplibregl-marker.map-poi-pickable { pointer-events: auto; cursor: pointer; }
+.poi-layout-pending .map-poi-pickable { visibility: hidden; }
 .maplibregl-marker.map-district-caption { z-index: 1; }

@@ -593,7 +593,7 @@ function poiVisibilityFilter(): ExpressionSpecification {
     .map<ExpressionSpecification>(group => ['!', ['in', group, ['coalesce', ['get', 'visibilityGroups'], ['literal', []]]]])];
 }
 function poiFilter(): ExpressionSpecification {
-  if (navigation.guidingRoute || !localMapDetailsVisible()) return alwaysFalseFilter();
+  if (navigation.guidingRoute || !poisVisibleAtScale()) return alwaysFalseFilter();
   const zoom: ExpressionSpecification = ['zoom'];
   const types: ExpressionSpecification = contextMode === 'transit' &&
       (contextOptions.ordinary_pois == null || contextOptions.ordinary_pois === 'hidden') ? airportPoi
@@ -603,7 +603,7 @@ function poiFilter(): ExpressionSpecification {
     ['<=', ['get', 'minZoom'], zoom], ['in', zoom, ['get', 'visibleZooms']]];
 }
 function transitPoiFilter(): ExpressionSpecification {
-  if (navigation.guidingRoute || !localMapDetailsVisible() || transitBasemap()) return alwaysFalseFilter();
+  if (navigation.guidingRoute || !poisVisibleAtScale() || transitBasemap()) return alwaysFalseFilter();
   const zoom: ExpressionSpecification = ['zoom'];
   return ['all', poiVisibilityFilter(), ['==', ['get', 'owner'], 'transit'],
     ['<=', ['get', 'minZoom'], zoom], ['in', zoom, ['get', 'visibleZooms']]];
@@ -615,6 +615,10 @@ function scaleBarRange(): number {
 }
 function localMapDetailsVisible(): boolean {
   return scaleBarRange() <= 6000;
+}
+function poisVisibleAtScale(): boolean {
+  // The scale rounds down to 2 km until it reaches the next step (3 km).
+  return contextMode === 'map' && transitBasemap() ? scaleBarRange() < 3000 : localMapDetailsVisible();
 }
 function stationScaleVisible(): boolean {
   return scaleBarRange() <= 400;
@@ -630,13 +634,13 @@ type RailStationBody = GeoJSON.Feature<GeoJSON.Polygon, {
 }>;
 function visibleRailStationBodies(): RailStationBody[] {
   if (stationDetail() !== 'bodies') return [];
-  const allBodies = (sourceData.railStationBodies?.features ?? []) as RailStationBody[];
+  const allBodies = ((sourceData.railStationBodies?.features ?? []) as RailStationBody[])
+    .filter(body => body.properties.name.trim() && body.properties.servingLineIds.length);
   if (navigationFocus) return allBodies;
   if (!transitBasemap() || contextOptions.stations === false) return [];
-  const bodies = allBodies.filter(body => body.properties.railType !== 'train' || body.properties.name.trim());
-  if (contextOptions.types == null && contextOptions.line_ids == null) return bodies;
+  if (contextOptions.types == null && contextOptions.line_ids == null) return allBodies;
   const lines = new Set(selectedTransitRouteIds());
-  return bodies.filter(body => body.properties.servingLineIds.some(id => lines.has(id)));
+  return allBodies.filter(body => body.properties.servingLineIds.some(id => lines.has(id)));
 }
 function selectedTransitRouteIds(): number[] {
   const typeValues = contextOptions.types as unknown[] | undefined;
@@ -667,7 +671,7 @@ function alwaysFalseFilter(): ExpressionSpecification {
   return ['==', ['get', 'featureId'], ''] as unknown as ExpressionSpecification;
 }
 function transitViewPoiFilter(): ExpressionSpecification {
-  if (navigation.guidingRoute || !localMapDetailsVisible() || transitBasemap()) return alwaysFalseFilter();
+  if (navigation.guidingRoute || !poisVisibleAtScale() || transitBasemap()) return alwaysFalseFilter();
   const zoom: ExpressionSpecification = ['zoom'];
   return ['all', poiVisibilityFilter(), ['<=', ['coalesce', ['get', 'minZoom'], 0], zoom],
     ['any', ['==', ['get', 'iconStatus'], 'empty'], ['in', zoom, ['get', 'visibleZooms']]]];
@@ -1391,7 +1395,7 @@ function applyBasemapPaint(): void {
   const mutedBuilding = lighterPaint(buildingColor(), baseTint);
   for (const id of ['buildings', 'poi-area']) {
     set(id, 'fill-color', mutedBuilding);
-    set(id, 'fill-opacity', id === 'poi-area' && (navigation.guidingRoute || !localMapDetailsVisible()) ? 0 : 1);
+    set(id, 'fill-opacity', id === 'poi-area' && (navigation.guidingRoute || !poisVisibleAtScale()) ? 0 : 1);
   }
   set('buildings', 'fill-outline-color', lighterPaint(token('building').border ?? '#D7DAE1', baseTint));
   set(BUILDINGS_3D, 'fill-extrusion-color', mutedBuilding);
@@ -1895,7 +1899,8 @@ function addBaseTextLayers(): void {
         'text-field': ['coalesce', ['get', 'displayText'], ['get', 'text']], 'text-font': nativeTextFont(labelType),
         'text-size': nativeTextSize(labelType), 'text-max-width': 12,
         'text-max-angle': 30, 'text-padding': 4,
-        'text-rotation-alignment': 'viewport', 'text-pitch-alignment': 'viewport',
+        'text-rotation-alignment': scope === 'road' ? 'map' : 'viewport', 'text-pitch-alignment': 'viewport',
+        ...(scope === 'road' ? {'text-keep-upright': true} : {}),
         'text-allow-overlap': false, 'text-ignore-placement': false,
       }});
   }
@@ -1913,9 +1918,11 @@ function updateBaseTextLayers(): void {
     map.setLayoutProperty(id, 'text-font', nativeTextFont(labelType));
     map.setLayoutProperty(id, 'text-size', nativeTextSize(labelType));
     map.setLayoutProperty(id, 'symbol-spacing', Number(token('baseText').road_repeat ?? 320));
-    map.setPaintProperty(id, 'text-color', labelColor(labelType));
-    map.setPaintProperty(id, 'text-halo-color', labelStroke(labelType).color);
-    map.setPaintProperty(id, 'text-halo-width', labelHalo(labelType) ? nativeTextSize(labelType, 'width') : 0);
+    const road = scope === 'road';
+    map.setPaintProperty(id, 'text-color', road ? '#687078' : labelColor(labelType));
+    map.setPaintProperty(id, 'text-halo-color', road ? 'rgba(255, 255, 255, 0.75)' : labelStroke(labelType).color);
+    const haloWidth = nativeTextSize(labelType, 'width');
+    map.setPaintProperty(id, 'text-halo-width', labelHalo(labelType) ? (road ? ['*', .7, haloWidth] : haloWidth) : 0);
     map.setPaintProperty(id, 'text-halo-blur', labelHalo(labelType) ? nativeTextSize(labelType, 'blur') : 0);
   }
 }
@@ -2110,6 +2117,8 @@ function openStationDetails(stationId?: string, point?: {x: number; y: number}):
   }
   if (!station) return false;
   const group = groupStationDots(stations, true).find(members => members.includes(station!)) ?? [station];
+  const name = stationGroupName(stationLabelMembers(group));
+  if (!name) return false;
   const nearbyBuses = allStations.flatMap(candidate => {
     const buses = candidate.lines.filter(line => line.kind === 'bus');
     return buses.length && group.some(member => member.center.distanceTo(candidate.center) < 200) ? buses : [];
@@ -2118,7 +2127,7 @@ function openStationDetails(stationId?: string, point?: {x: number; y: number}):
     .sort((a, b) => a.name.localeCompare(b.name, i18n.language, {numeric: true}));
   const key = ['train', 'metro', 'monorail'].find(kind => lines.some(line => line.kind === kind)) ?? 'metro';
   clearInspectorSelection();
-  navigation.openPlace({name: stationGroupName(stationLabelMembers(group)) || station.name || i18n.t('navigation_unnamedStop'),
+  navigation.openPlace({name,
     kind: i18n.t(`navigation_placeStation_${key}`), district: stationDistrict(station.center), lines,
     position: [station.center.lat * 111195, 0, -station.center.lng * 111195],
     geometry: {type: 'Point', coordinates: station.center.toArray()}});
@@ -2163,12 +2172,13 @@ function makeStationPickable(element: HTMLElement, stationId: string): void {
 }
 
 function stationCrossing(group: StationDot[], center: Point): Point | null {
-  const lines = [...new Map(group.flatMap(station => station.lines).map(line => [line.id, line])).values()];
+  const railStations = group.filter(station => station.lines.some(isHeavyRail));
+  const lines = [...new Map(railStations.flatMap(station => station.lines.filter(isHeavyRail)).map(line => [line.id, line])).values()];
   if (lines.length !== 2 || (lines[0].groupId ?? lines[0].id) === (lines[1].groupId ?? lines[1].id)) return null;
-  if (group.length > 1) {
+  if (railStations.length > 1) {
     const navigationData = EMBEDDED ? embeddedJson('navigation.json') as NavigationPackage | undefined : undefined;
     const sharedFacility = Object.values(navigationData?.transit?.stationObjects ?? {}).some(object =>
-      object.rings.length && lines.every(line => group.some(station =>
+      object.rings.length && lines.every(line => railStations.some(station =>
         station.lines.includes(line) && station.stopIds.some(id => object.platforms.includes(String(id))))));
     if (!sharedFacility) return null;
   }
@@ -2204,12 +2214,19 @@ function stationCrossing(group: StationDot[], center: Point): Point | null {
 function layoutStationDots(kept: Set<string>, lines: Map<number, DisplayLine>, covered: Set<string>): void {
   const detail = stationDetail();
   if (navigationFocus || !transitBasemap() || detail === 'overview' || contextOptions.stations === false) return;
-  const stations = findStationDots(lines).filter(station => !covered.has(station.id)
-    && (station.name || !station.lines.every(line => line.kind === 'train')));
+  const groupingLines = new Map(lines);
+  if (detail === 'dots') {
+    for (const [id, line] of findDisplayLines(true)) {
+      if (line.kind === 'monorail') groupingLines.set(id, line);
+    }
+  }
+  const stations = findStationDots(groupingLines).filter(station => !covered.has(station.id));
   const groups = groupStationDots(stations, detail === 'dots');
 
   const bounds = map.getBounds();
   for (const group of groups) {
+    const groupLines = group.flatMap(station => station.lines);
+    if (!groupLines.some(line => lines.has(line.id))) continue;
     const labelStations = stationLabelMembers(group);
     const first = labelStations[0];
     const center: [number, number] = [
@@ -2218,8 +2235,9 @@ function layoutStationDots(kept: Set<string>, lines: Map<number, DisplayLine>, c
     ];
     if (!bounds.contains(center)) continue;
     const name = stationGroupName(labelStations);
-    const services = new Set(group.flatMap(station => station.lines.map(line => line.groupId ?? line.id)));
-    const interchange = group.length > 1 || services.size > 1;
+    if (!name) continue;
+    const services = new Set(groupLines.map(line => line.groupId ?? line.id));
+    const interchange = groupLines.some(line => line.kind !== 'train') && (group.length > 1 || services.size > 1);
     const color = first.lines[0].color;
     const id = 'station-dot:'+first.id;
     kept.add(id);
@@ -2228,7 +2246,7 @@ function layoutStationDots(kept: Set<string>, lines: Map<number, DisplayLine>, c
     element.classList.add('map-station-dot');
     element.classList.toggle('is-scale-dot', detail === 'dots');
     makeStationPickable(element, first.id);
-    element.classList.toggle('metro-station-priority', group.some(station => station.lines.some(line => line.kind === 'metro')));
+    element.classList.toggle('metro-station-priority', groupLines.some(line => line.kind === 'metro'));
     const key = JSON.stringify([name, interchange, color]);
     if (element.dataset.stationDot === key) continue;
     element.dataset.stationDot = key;
@@ -2245,13 +2263,14 @@ function layoutLabels(): void {
   if (!currentManifest || map.isMoving()) return;
   labelLayoutTime = performance.now();
   const localDetails = localMapDetailsVisible();
+  const showPois = !navigation.guidingRoute && poisVisibleAtScale();
   const overlay = showsTransportOverlay();
   const ordinary = contextMode === 'transit' ? contextOptions.ordinary_pois !== 'hidden' && contextOptions.ordinary_pois != null : currentManifest.layers.poi !== false;
   const renderedLayers = overlay
     ? [contextOptions.facilities_enabled === false ? '' : 'tv-poi',
        currentManifest.layers.poi === false ? '' : 'pois']
     : currentManifest.layers.poi === false ? [] : ['pois', 'transit-pois'];
-  const layers = navigation.guidingRoute || !localDetails ? [] : renderedLayers.filter(id => id && map.getLayer(id));
+  const layers = showPois ? renderedLayers.filter(id => id && map.getLayer(id)) : [];
   // GeoJSON 更新及瓦片切换期间，符号放置结果可能仍引用上一版要素索引。
   if (layers.some(id => !map.isSourceLoaded((map.getLayer(id) as {source: string}).source))) return;
   const rendered = queryMapFeatures(layers);
@@ -2276,7 +2295,8 @@ function layoutLabels(): void {
     map.getCanvas().clientHeight, icons.map(f => [f.id, f.geometry, f.properties?.stationAnchor, f.layer.id]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))), currentManifest.layers,
     map.getBearing(), map.getPitch(), contextMode, contextOptions, token('transit').label,
     token('transit').labelStyle, labelVisibility, token('baseText'),
-    poiNameVisibility, effectivePoiIcons(), localDetails, navigation.transitFocus]);
+    poiNameVisibility, effectivePoiIcons(), localDetails, showPois, navigation.transitFocus]);
+  map.getContainer().classList.remove('poi-layout-pending');
   if (key === labelLayoutKey) return;
   labelLayoutKey = key;
   const kept = new Set<string>();
@@ -2293,22 +2313,32 @@ function layoutLabels(): void {
   const boxesOverlap = (a: Box, b: Box) => b[0]<a[2] && a[0]<b[2] && b[1]<a[3] && a[1]<b[3];
   const overlaps = (b: Box) => keys(b).some(k => (cells.get(k) ?? []).some(a => boxesOverlap(a, b)));
   const stationCaptionClearance: Box[] = [];
+  const canvasRect = map.getCanvasContainer().getBoundingClientRect();
+  const screenBox = (rect: DOMRect, pad = 0): Box => [
+    rect.left - canvasRect.left - pad, rect.top - canvasRect.top - pad,
+    rect.right - canvasRect.left + pad, rect.bottom - canvasRect.top + pad,
+  ];
   const overlapArea = (b: Box): number => [...new Set(keys(b).flatMap(k => cells.get(k) ?? []))]
     .reduce((sum, a) => sum + Math.max(0, Math.min(b[2], a[2])-Math.max(b[0], a[0]))
       * Math.max(0, Math.min(b[3], a[3])-Math.max(b[1], a[1])), 0);
-  for (const id of kept) {
-    const marker = markers.get(id)!.marker;
-    const element = marker.getElement();
-    if (!element.classList.contains('metro-station-priority')) continue;
-    const root = element.getBoundingClientRect(), center = map.project(marker.getLngLat());
-    const left = center.x - root.width / 2, top = center.y - root.height / 2;
-    reserve([left, top, left + root.width, top + root.height]);
-    const caption = element.querySelector('.metro-station-caption, .map-station-dot-label')?.getBoundingClientRect();
-    if (caption?.width && caption.height) {
-      const [x0, y0, x1, y1] = [left + caption.left - root.left, top + caption.top - root.top,
-        left + caption.right - root.left, top + caption.bottom - root.top];
-      reserve([x0 - 2, y0 - 2, x1 + 2, y1 + 2]);
-      stationCaptionClearance.push([x0 - 10, y0 - 10, x1 + 10, y1 + 10]);
+  const metroMarkers = [...kept].map(id => markers.get(id)!.marker.getElement())
+    .filter(element => element.classList.contains('metro-station-priority'));
+  const metroNames = metroMarkers.flatMap(element => {
+    const name = element.querySelector<HTMLElement>('.metro-station-name, .map-station-dot-label');
+    return name ? [{name, rect: name.getBoundingClientRect()}] : [];
+  }).sort((a, b) => a.rect.width - b.rect.width);
+  for (const {name, rect} of metroNames) {
+    const box = screenBox(rect, 2);
+    const collide = overlaps(box);
+    name.style.visibility = collide ? 'hidden' : '';
+    if (collide) continue;
+    reserve(box);
+    stationCaptionClearance.push(screenBox(rect, 10));
+  }
+  for (const element of metroMarkers) {
+    reserve(screenBox(element.getBoundingClientRect()));
+    for (const badge of element.querySelectorAll('.metro-station-lines .navigation-line-capsule')) {
+      reserve(screenBox(badge.getBoundingClientRect(), 2));
     }
   }
   const bounds = map.getBounds();
@@ -2361,7 +2391,7 @@ function layoutLabels(): void {
     }
   };
   const width = map.getCanvas().clientWidth, height = map.getCanvas().clientHeight;
-  const sources = navigation.guidingRoute || !localDetails ? [] : overlay
+  const sources = !showPois ? [] : overlay
     ? (currentManifest.layers.poi === false ? [] : mapPoiDisplayFeatures.filter((f: any) =>
         f.properties?.transportClass === 'airport' || (ordinary && f.properties?.owner !== 'transit')))
     : currentManifest.layers.poi === false ? [] : mapPoiDisplayFeatures;
@@ -2413,16 +2443,11 @@ function layoutLabels(): void {
       const font = `${stationSymbol ? 400 : 600} ${fontSize}px ${labelFontFamily(labelType)}`;
       const text = spaceMixedText(String(f.properties[field]));
       const textWidth = measuredLabelWidth(text, font);
-      const labelWidth = textWidth + 4, labelHeight = fontSize + 4;
-      const gap = stationSymbol ? Math.max(icon?.halfWidth ?? 0, stationRadius) + 5 : (icon ? icon.halfWidth + 2.5 : 0);
+      const labelWidth = textWidth + 4;
+      const gap = stationSymbol ? Math.max(icon?.halfWidth ?? 0, stationRadius) + 5 : (icon ? icon.halfWidth + 4 : 0);
       const offset = (p.x + gap + labelWidth <= width ? 1 : -1) * (gap + textWidth / 2);
-      const box: Box = [p.x + offset - labelWidth / 2, p.y - labelHeight / 2,
-        p.x + offset + labelWidth / 2, p.y + labelHeight / 2];
-      if (overlaps(box) || stationCaptionClearance.some(station => boxesOverlap(station, box))) continue;
-      reserve(box);
       const featureColor = String(f.properties.labelColor ?? '');
       const id = `poi:${f.properties.featureId ?? f.properties.poiId ?? f.id}`;
-      kept.add(id);
       const el = placeLabel(id, coordinates, [offset + x, y], {group, labelType, featureColor, transitStationName});
       el.classList.add('map-label', `map-label-${group}`);
       el.classList.toggle('map-poi-caption', !stationSymbol);
@@ -2434,6 +2459,10 @@ function layoutLabels(): void {
       el.style.color = labelColor(labelType, featureColor);
       el.style.fontSize = `${fontSize}px`; el.style.fontFamily = labelFontFamily(labelType);
       applyLabelHalo(el, labelType);
+      const box = screenBox(el.getBoundingClientRect(), 2);
+      if (overlaps(box) || stationCaptionClearance.some(station => boxesOverlap(station, box))) continue;
+      reserve(box);
+      kept.add(id);
     }
   };
   // Station signs get the first claim on space, then POI icons, then POI names.
@@ -2530,15 +2559,21 @@ function layoutLabels(): void {
 let lastStationScale: boolean | undefined;
 let lastStationDetail: StationDetail | undefined;
 let lastLocalDetails: boolean | undefined;
+let lastPoiScale: boolean | undefined;
+for (const name of ['zoomstart', 'rotatestart', 'pitchstart'] as const) {
+  map.on(name, () => map.getContainer().classList.add('poi-layout-pending'));
+}
 map.on('move', () => {
   const visible = stationScaleVisible();
   const detail = stationDetail();
   const localDetails = localMapDetailsVisible();
-  if ((visible !== lastStationScale || detail !== lastStationDetail || localDetails !== lastLocalDetails)
+  const poiScale = poisVisibleAtScale();
+  if ((visible !== lastStationScale || detail !== lastStationDetail || localDetails !== lastLocalDetails || poiScale !== lastPoiScale)
       && currentManifest && map.getLayer('stations')) {
     lastStationScale = visible;
     lastStationDetail = detail;
     lastLocalDetails = localDetails;
+    lastPoiScale = poiScale;
     applyContextStyling();
   }
   scheduleLabels();
