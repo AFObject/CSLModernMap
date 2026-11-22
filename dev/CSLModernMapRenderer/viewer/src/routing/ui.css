@@ -241,7 +241,7 @@
 .navigation-pin.destination { background: #c52a3a; }
 .navigation-route-stop-label {
   z-index: 1; pointer-events: none; white-space: nowrap; font-size: 12px; font-weight: 500;
-  color: #24282e; line-height: 1.2;
+  color: #354153; line-height: 1.2;
 }
 .navigation-route-stop-label.is-endpoint { font-size: 14px; font-weight: 600; }
 .navigation-route-stop-name {

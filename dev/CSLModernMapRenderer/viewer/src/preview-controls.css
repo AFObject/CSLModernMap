@@ -8,7 +8,7 @@ html[data-ui-appearance="dark"] :is(.preview-controls, .preview-guide, .preview-
   --preview-border: #494949; --preview-hover: #383838; --preview-accent: #99caff; --preview-on-accent: #00325c;
 }
 .preview-controls *, .preview-guide * { box-sizing: border-box; }
-.preview-controls [hidden], .preview-controls[hidden] { display: none !important; }
+.preview-controls [hidden], .preview-controls[hidden], .preview-view-actions [hidden] { display: none !important; }
 .preview-controls button, .preview-guide button, .preview-view-actions button {
   font: inherit; color: inherit; background: var(--preview-surface); border: 1px solid var(--preview-border);
   border-radius: 4px; min-height: 34px; padding: 6px 12px; cursor: pointer;
@@ -67,12 +67,46 @@ html[data-ui-appearance="dark"] :is(.preview-controls, .preview-guide, .preview-
 .preview-layer-switch:checked { background: var(--preview-accent); border-color: var(--preview-accent); }
 .preview-layer-switch:checked::before { transform: translateX(16px); background: var(--preview-on-accent); }
 .preview-layer-switch:disabled { opacity: .45; }
-.preview-view-actions { display: flex; flex-direction: column; gap: 6px; }
-.maplibregl-ctrl-bottom-right { bottom: 32px; display: flex; flex-direction: column; align-items: end; }
-.maplibregl-ctrl-bottom-right > .preview-3d { order: 0; }
-.maplibregl-ctrl-bottom-right > .preview-view-actions { order: 1; }
-html[data-ui-appearance="dark"] .maplibregl-ctrl-group { background: #2c2c2c; }
-html[data-ui-appearance="dark"] .maplibregl-ctrl-group button { color: #f4f4f4; }
+.maplibregl-ctrl-top-right {
+  --map-tool-size: 42px; --map-tool-bg: #fbfcf7ed; --map-tool-border: #fff;
+  --map-tool-ink: #273341; --map-tool-divider: #58637422;
+  top: 12px; right: 12px; display: flex; flex-direction: column; align-items: end; gap: 8px;
+}
+.maplibregl-ctrl-top-right > .maplibregl-ctrl { margin: 0; }
+.maplibregl-ctrl-top-right > .preview-view-actions { order: 0; }
+.maplibregl-ctrl-top-right > .preview-3d { order: 1; }
+.maplibregl-ctrl-top-right > .maplibregl-ctrl-group:has(.maplibregl-ctrl-compass) { order: 2; border-radius: 50%; }
+.preview-view-actions { display: flex; flex-direction: column; align-items: end; gap: 8px; }
+.preview-map-pill, .preview-view-actions > button, .maplibregl-ctrl-top-right > .maplibregl-ctrl-group {
+  background: var(--map-tool-bg); border: 1px solid var(--map-tool-border); border-radius: 18px;
+  box-shadow: 0 2px 10px #28374a1c; backdrop-filter: blur(10px);
+}
+.preview-map-pill { overflow: hidden; display: grid; }
+.maplibregl-ctrl-top-right .preview-view-actions button,
+.maplibregl-ctrl-top-right .preview-3d-toggle,
+.maplibregl-ctrl-top-right .maplibregl-ctrl-compass {
+  width: var(--map-tool-size); height: var(--map-tool-size); min-width: 0; min-height: 0;
+  padding: 0; color: var(--map-tool-ink); border-radius: inherit;
+}
+.preview-view-actions .preview-map-pill > button { border: 0; border-radius: 0; background: transparent; }
+.preview-view-actions .preview-map-pill > button:not([hidden]) + button { border-top: 1px solid var(--map-tool-divider); }
+.preview-view-actions .preview-map-pill > button:focus-visible { outline-offset: -3px; }
+.maplibregl-ctrl-top-right :is(.preview-view-actions, .preview-3d-toggle) .preview-button-label { display: none; }
+.maplibregl-ctrl-top-right :is(.preview-view-actions, .preview-3d-toggle) .preview-icon { width: 19px; height: 19px; flex-basis: 19px; }
+.preview-view-actions .preview-map-pill > button[aria-pressed="true"] { color: var(--preview-accent); background: #668ab514; }
+.preview-map-zoom button { position: relative; }
+.preview-map-zoom .preview-icon { display: none; }
+.preview-map-zoom button::before, .preview-map-zoom-in::after {
+  content: ''; position: absolute; background: currentColor; border-radius: 2px;
+  top: 50%; left: 50%; transform: translate(-50%, -50%);
+}
+.preview-map-zoom button::before { width: 15px; height: 2px; }
+.preview-map-zoom-in::after { width: 2px; height: 15px; }
+.maplibregl-ctrl-top-right .maplibregl-ctrl-compass .maplibregl-ctrl-icon { background-size: 29px; }
+html[data-ui-appearance="dark"] .maplibregl-ctrl-top-right {
+  --map-tool-bg: #252b35ed; --map-tool-border: #464f5c;
+  --map-tool-ink: #f2f5fa; --map-tool-divider: #ffffff26;
+}
 html[data-ui-appearance="dark"] .maplibregl-ctrl-icon { filter: invert(1); }
 .preview-guide { box-sizing: border-box; width: 480px; max-width: calc(100% - 24px); max-height: calc(100% - 24px);
   padding: 0; border: 1px solid var(--preview-border); border-radius: 8px; background: var(--preview-surface); box-shadow: 0 12px 36px #0004; }
@@ -88,7 +122,7 @@ html[data-ui-appearance="dark"] .maplibregl-ctrl-icon { filter: invert(1); }
 .preview-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .road-warning { top: 58px; }
 @media (max-width: 520px) {
-  .preview-search-row { right: 12px; }
+  .preview-search-row { right: 64px; }
   .preview-search { flex: 1; }
   .preview-search input { font-size: 16px; }
   .preview-search-row .navigation-panel { position: fixed; top: auto; left: 8px; right: 8px; bottom: 30px; width: auto; max-width: none; max-height: 55vh; }
@@ -121,9 +155,6 @@ html[data-ui-appearance="dark"] .maplibregl-ctrl-icon { filter: invert(1); }
 .preview-controls-collapsed .preview-layer-panel { bottom: 0; max-height: calc(100vh - 110px); }
 .preview-controls-collapsed .preview-search-results { max-height: min(400px, calc(100vh - 184px)); }
 .preview-controls-collapsed .preview-search-row .navigation-panel { max-height: calc(100vh - 154px); }
-.preview-controls-collapsed .maplibregl-ctrl-bottom-right > .preview-view-actions { margin-right: 0; align-items: end; }
-.preview-controls-collapsed .maplibregl-ctrl-bottom-right > .preview-3d { margin-right: 0; }
-.preview-controls-collapsed .preview-view-actions > :is(.preview-edge-tab, .preview-collapse-toggle) { border-radius: 4px 0 0 4px; }
 .preview-controls-collapsed .preview-edge-tab[aria-expanded="true"] { background: var(--preview-hover); }
 .preview-controls-collapsed:not([data-preview-open-group="search"]) .preview-search-row,
 .preview-controls-collapsed:not([data-preview-open-group="layers"]) .preview-layers,

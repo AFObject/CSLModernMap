@@ -91,6 +91,8 @@
   "navigation_transit": "Public transport",
   "navigation_drivingMode": "Driving",
   "navigation_building": "Building",
+  "navigation_placePoi": "Place of interest",
+  "navigation_placePark": "Park",
   "navigation_placeStation_train": "Train station",
   "navigation_placeStation_metro": "Metro station",
   "navigation_placeStation_monorail": "Monorail station",

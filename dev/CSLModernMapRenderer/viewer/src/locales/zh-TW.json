@@ -91,6 +91,8 @@
   "navigation_transit": "公共交通",
   "navigation_drivingMode": "開車",
   "navigation_building": "建築",
+  "navigation_placePoi": "地點",
+  "navigation_placePark": "公園",
   "navigation_placeStation_train": "火車站",
   "navigation_placeStation_metro": "捷運站",
   "navigation_placeStation_monorail": "單軌站",

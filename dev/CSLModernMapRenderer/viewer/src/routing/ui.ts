@@ -415,22 +415,29 @@ export class NavigationControl {
 
   get selectingPoint(): boolean { return this.picking !== null; }
   get transitFocus(): boolean { return this.result?.costProfile === 'transit'; }
+  get guidingRoute(): boolean { return this.result !== null && this.inspectedLine === null; }
   get canInspectTransitLines(): boolean {
     return this.loader !== null && this.panel.hidden && !this.result;
   }
   get canInspectPlaces(): boolean {
+    return this.canPickTransitLine || this.inspectedLine !== null;
+  }
+  get canPickTransitLine(): boolean {
     return this.canInspectTransitLines || (this.inspectedPlace !== null && this.inspectedLine === null);
   }
   setImmersive(immersive: boolean): void { this.immersive = immersive; }
 
-  openPlace(station: PlaceInspection): void {
+  openPlace(place: PlaceInspection): void {
     if (!this.canInspectPlaces) return;
+    const switchingFromLine = this.inspectedLine !== null;
     this.cancel();
-    this.inspectedPlace = station;
+    this.inspectedLine = null;
+    this.inspectedPlace = place;
     this.updatePlaceMarker();
     this.panelOpened();
     this.panel.hidden = false;
     this.root.querySelector('button')?.setAttribute('aria-expanded', 'true');
+    if (switchingFromLine) this.draw();
     this.displayResult();
   }
 
@@ -459,8 +466,8 @@ export class NavigationControl {
     }
   }
 
-  dismissPlace(): void {
-    if (this.inspectedPlace && !this.inspectedLine) this.closeInspection();
+  dismissMapSelection(): void {
+    if (this.inspectedPlace || this.inspectedLine) this.closeInspection();
   }
 
   private closeInspection(returnToStation = false): void {
@@ -932,7 +939,7 @@ export class NavigationControl {
     element.setAttribute('aria-hidden', 'true');
     const pin = document.createElement('span');
     pin.className = 'navigation-selected-place-pin';
-    pin.append(controlIcon(place.lines ? 'train' : 'building'));
+    pin.append(controlIcon(place.lines ? 'train' : place.geometry.type === 'Point' ? 'map-pin' : 'building'));
     element.append(pin);
     this.placeMarker = new maplibregl.Marker({element, anchor: 'bottom', rotationAlignment: 'viewport'})
       .setLngLat(geo(place.position)).addTo(this.map);

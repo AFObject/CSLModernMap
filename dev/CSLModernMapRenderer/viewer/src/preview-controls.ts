@@ -53,6 +53,7 @@ export class PreviewControls {
   });
   private readonly help = document.createElement('button');
   private readonly fit = document.createElement('button');
+  private readonly transitToggle = document.createElement('button');
   private readonly zoomIn = document.createElement('button');
   private readonly zoomOut = document.createElement('button');
   private readonly dialog = document.createElement('dialog');
@@ -166,10 +167,18 @@ export class PreviewControls {
     }
     this.layers.append(this.layerPanel, this.layerToggle);
     this.right.className = 'maplibregl-ctrl preview-view-actions';
-    this.fit.type = this.help.type = this.zoomIn.type = this.zoomOut.type = 'button';
+    this.transitToggle.type = this.fit.type = this.help.type = this.zoomIn.type = this.zoomOut.type = 'button';
+    this.transitToggle.hidden = true;
+    this.transitToggle.onclick = () => this.checks.get('metro')?.input.click();
     this.fit.onclick = fitMap; this.help.onclick = () => this.showGuide(false);
     this.zoomIn.onclick = () => zoomMap(1); this.zoomOut.onclick = () => zoomMap(-1);
-    this.right.append(this.fit, this.zoomIn, this.zoomOut, this.help);
+    this.zoomIn.classList.add('preview-map-zoom-in');
+    this.zoomOut.classList.add('preview-map-zoom-out');
+    this.help.classList.add('preview-map-command');
+    const tools = document.createElement('div'), zoom = document.createElement('div');
+    tools.className = 'preview-map-pill'; zoom.className = 'preview-map-pill preview-map-zoom';
+    tools.append(this.transitToggle, this.fit); zoom.append(this.zoomIn, this.zoomOut);
+    this.right.append(tools, zoom, this.help);
     this.top.id = 'preview-search-row'; this.layers.id = 'preview-layers'; this.right.id = 'preview-view-actions';
     for (const [group, target] of [['search', this.top], ['layers', this.layers], ['view', this.right]] as const) {
       const tab = document.createElement('button'); tab.type = 'button';
@@ -259,6 +268,10 @@ export class PreviewControls {
       input.checked = layers[key] !== false; input.disabled = !enabled || this.pending.has(key);
     }
     for (const {section} of this.sections) section.hidden = !section.querySelector('label:not([hidden])');
+    const metro = this.checks.get('metro')!.input;
+    this.transitToggle.hidden = metro.parentElement!.hidden;
+    this.transitToggle.disabled = metro.disabled;
+    this.transitToggle.setAttribute('aria-pressed', String(metro.checked));
   }
 
   setGuideAvailable(available: boolean): void { this.help.disabled = !available; }
@@ -286,7 +299,10 @@ export class PreviewControls {
   }
 
   private translateCollapse(): void {
-    setButtonContent(this.collapseToggle, text(this.controlsCollapsed ? 'expand' : 'collapse'), 'arrows-up-down');
+    const label = text(this.controlsCollapsed ? 'expand' : 'collapse');
+    setButtonContent(this.collapseToggle, label, 'arrows-up-down');
+    this.collapseToggle.title = label;
+    this.collapseToggle.setAttribute('aria-label', label);
     this.collapseToggle.setAttribute('aria-expanded', String(!this.controlsCollapsed));
   }
 
@@ -298,10 +314,19 @@ export class PreviewControls {
     setButtonContent(this.layerClose, text('close'), 'x');
     setButtonContent(this.fit, text('fit'), 'zoom-scan'); setButtonContent(this.help, text('help'), 'help');
     setButtonContent(this.zoomIn, text('zoomIn'), 'zoom-in'); setButtonContent(this.zoomOut, text('zoomOut'), 'zoom-out');
+    setButtonContent(this.transitToggle, text('metro'), 'train');
+    for (const [button, key] of [[this.fit, 'fit'], [this.help, 'help'], [this.zoomIn, 'zoomIn'],
+      [this.zoomOut, 'zoomOut'], [this.transitToggle, 'metro']] as const) {
+      button.title = text(key);
+      button.setAttribute('aria-label', text(key));
+    }
     this.translateCollapse();
-    for (const [group, tab] of this.edgeTabs) setButtonContent(tab,
-      text(group === 'search' ? 'searchRoutes' : group === 'layers' ? 'layers' : 'actions'),
-      group === 'search' ? 'search' : group === 'layers' ? 'stack-2' : 'adjustments');
+    for (const [group, tab] of this.edgeTabs) {
+      const label = text(group === 'search' ? 'searchRoutes' : group === 'layers' ? 'layers' : 'actions');
+      setButtonContent(tab, label, group === 'search' ? 'search' : group === 'layers' ? 'stack-2' : 'adjustments');
+      tab.title = label;
+      tab.setAttribute('aria-label', label);
+    }
     this.title.textContent = text('title'); setButtonContent(this.confirm, text('gotIt'), 'check');
     for (const {heading, key} of this.sections) heading.textContent = text(key);
     for (const row of this.guideRows) { row.title.textContent = text(row.key); row.description.textContent = text(row.help); }
