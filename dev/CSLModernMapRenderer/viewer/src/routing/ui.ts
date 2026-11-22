@@ -264,7 +264,7 @@ export class NavigationControl {
     const statusActions = document.createElement('div'); statusActions.className = 'navigation-actions';
     statusActions.append(this.cancelButton, this.retryButton);
     const clear = this.button('clearRoute', () => this.clearRoute()); clear.className = 'navigation-clear';
-    this.panel.append(heading, this.modes, endpointButtons, this.placeResults, this.morePlaces, this.coordinateDetails, this.message, statusActions,
+    this.panel.append(heading, endpointButtons, this.modes, this.placeResults, this.morePlaces, this.coordinateDetails, this.message, statusActions,
       this.summary, this.transitDetails, this.stationDetails, this.resultActions, this.routeDetails, clear);
     for (const name of ['click', 'dblclick', 'pointerdown', 'touchstart'] as const)
       this.panel.addEventListener(name, event => event.stopPropagation());
@@ -489,6 +489,9 @@ export class NavigationControl {
       else element.textContent = text(key);
     }
     this.root.setAttribute('aria-label', text('title'));
+    const toggle = this.root.querySelector('button')!;
+    toggle.title = text('title');
+    toggle.setAttribute('aria-label', text('title'));
     for (const element of this.root.querySelectorAll<HTMLElement>('[data-navigation-label]')) element.setAttribute('aria-label', text(element.dataset.navigationLabel!));
     this.fitButton.title = text('fit');
     this.backButton.title = text('timelineBack');
@@ -497,6 +500,14 @@ export class NavigationControl {
     this.renderEndpoints(); this.renderCards(); this.displayResult();
     if (!this.result && !this.inspectedPlace) this.message.textContent = text(this.busy ? 'computing' : this.picking === 'origin' ? 'pickOrigin' : this.picking ? 'pickDestination' : 'ready');
     if (this.picking && document.activeElement === this.placeInputs[this.picking] && !this.composing) this.searchPlaces(this.picking);
+  }
+
+  private transferArrow(): HTMLSpanElement {
+    const arrow = document.createElement('span');
+    arrow.className = 'navigation-transfer-arrow';
+    arrow.setAttribute('aria-hidden', 'true');
+    arrow.textContent = '▸';
+    return arrow;
   }
 
   setScene(loader: (() => Promise<NavigationPackage>) | null, routeOmitted = false): void {
@@ -778,7 +789,7 @@ export class NavigationControl {
         if (profile === 'transit') {
           label.hidden = true; via.replaceChildren();
           for (const [index, leg] of (result.legs ?? []).entries()) {
-            if (index) via.append(' ▸ ');
+            if (index) via.append(this.transferArrow());
             via.append(leg.mode === 'ride' ? lineCapsule(leg.name || text('transit'), leg.color) : walkCapsule(leg.walkKind==='transfer' ? Math.max(100,leg.distanceM) : leg.distanceM));
           }
           const long = result.legs?.find(leg => leg.walkKind === 'transfer' && leg.distanceM > LONG_TRANSFER_METERS);
@@ -1235,7 +1246,7 @@ export class NavigationControl {
         const lines = document.createElement('div');
         lines.className = 'navigation-route-stop-transfer';
         const [from, to] = point.transfer;
-        lines.append(lineCapsule(from.name || text('transit'), from.color), '▸',
+        lines.append(lineCapsule(from.name || text('transit'), from.color), this.transferArrow(),
           lineCapsule(to.name || text('transit'), to.color));
         element.append(lines);
       }

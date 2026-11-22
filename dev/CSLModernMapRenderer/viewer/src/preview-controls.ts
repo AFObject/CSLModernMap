@@ -43,6 +43,8 @@ export class PreviewControls {
   private readonly sections: Array<{section: HTMLElement; heading: HTMLElement; key: TextKey}> = [];
   private readonly abort = new AbortController();
   private readonly right = document.createElement('div');
+  private readonly cameraTools = document.createElement('div');
+  private mapToolsCollapsed = false;
   private readonly collapseToggle = document.createElement('button');
   private readonly edgeTabs = new Map<EdgeGroup, HTMLButtonElement>();
   private controlsCollapsed = false;
@@ -178,7 +180,9 @@ export class PreviewControls {
     const tools = document.createElement('div'), zoom = document.createElement('div');
     tools.className = 'preview-map-pill'; zoom.className = 'preview-map-pill preview-map-zoom';
     tools.append(this.transitToggle, this.fit); zoom.append(this.zoomIn, this.zoomOut);
-    this.right.append(tools, zoom, this.help);
+    this.cameraTools.className = 'preview-map-pill preview-camera-tools';
+    this.cameraTools.append(this.help);
+    this.right.append(tools, zoom, this.cameraTools);
     this.top.id = 'preview-search-row'; this.layers.id = 'preview-layers'; this.right.id = 'preview-view-actions';
     for (const [group, target] of [['search', this.top], ['layers', this.layers], ['view', this.right]] as const) {
       const tab = document.createElement('button'); tab.type = 'button';
@@ -191,9 +195,9 @@ export class PreviewControls {
     }
     this.collapseToggle.type = 'button'; this.collapseToggle.className = 'preview-collapse-toggle';
     this.collapseToggle.onclick = () => {
-      this.controlsCollapsed = !this.controlsCollapsed;
-      document.documentElement.classList.toggle('preview-controls-collapsed', this.controlsCollapsed);
-      this.setOpenGroup(null); this.translateCollapse();
+      this.mapToolsCollapsed = !this.mapToolsCollapsed;
+      this.right.classList.toggle('map-tools-collapsed', this.mapToolsCollapsed);
+      this.translateCollapse();
     };
     this.right.append(this.collapseToggle);
     this.viewSize.observe(this.right);
@@ -231,6 +235,10 @@ export class PreviewControls {
     onAdd: (): HTMLElement => this.right,
     onRemove: (): void => this.right.remove(),
   };
+
+  groupCameraControls(threeD: HTMLElement, compass: HTMLElement): void {
+    this.cameraTools.prepend(threeD, compass);
+  }
 
   rebuild(sources: Sources, preserveSearch = false): void {
     if (!preserveSearch) { this.closeSearch(); this.input.value = ''; }
@@ -299,11 +307,10 @@ export class PreviewControls {
   }
 
   private translateCollapse(): void {
-    const label = text(this.controlsCollapsed ? 'expand' : 'collapse');
-    setButtonContent(this.collapseToggle, label, 'arrows-up-down');
+    const label = text(this.mapToolsCollapsed ? 'expand' : 'collapse');
     this.collapseToggle.title = label;
     this.collapseToggle.setAttribute('aria-label', label);
-    this.collapseToggle.setAttribute('aria-expanded', String(!this.controlsCollapsed));
+    this.collapseToggle.setAttribute('aria-expanded', String(!this.mapToolsCollapsed));
   }
 
   private translate(): void {
@@ -311,6 +318,7 @@ export class PreviewControls {
     this.results.setAttribute('aria-label', text('search'));
     this.root.querySelector('#preview-search-help')!.textContent = text('searchHelp');
     setButtonContent(this.layerToggle, text('layers'), 'stack-2'); this.layerTitle.textContent = text('layers');
+    this.layerToggle.title = text('layers'); this.layerToggle.setAttribute('aria-label', text('layers'));
     setButtonContent(this.layerClose, text('close'), 'x');
     setButtonContent(this.fit, text('fit'), 'zoom-scan'); setButtonContent(this.help, text('help'), 'help');
     setButtonContent(this.zoomIn, text('zoomIn'), 'zoom-in'); setButtonContent(this.zoomOut, text('zoomOut'), 'zoom-out');

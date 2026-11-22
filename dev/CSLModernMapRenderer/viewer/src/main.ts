@@ -322,6 +322,9 @@ const previewControls = new PreviewControls(navigation, feature => {
   postEvent(type);
 }, () => map.getCanvas().focus(), EMBEDDED);
 map.addControl(previewControls.viewControl, 'top-right');
+const threeDControl = map.getContainer().querySelector<HTMLElement>('.preview-3d');
+const compassControl = map.getContainer().querySelector<HTMLElement>('.maplibregl-ctrl-compass')?.parentElement;
+if (threeDControl && compassControl) previewControls.groupCameraControls(threeDControl, compassControl);
 function updateZoomControls(): void {
   previewControls.setZoomAvailability(map.getZoom() < map.getMaxZoom(), map.getZoom() > map.getMinZoom());
 }
@@ -2288,7 +2291,8 @@ function layoutLabels(): void {
     }
   }
   const bounds = map.getBounds();
-  if (localDetails && !navigation.transitFocus) {
+  if (localDetails && !navigation.transitFocus
+      && (contextMode === 'transit' || !transitBasemap() || currentManifest.layers.district === true)) {
     const size = labelFontSize('poi') * 1.2;
     const font = labelFontFamily('poi');
     for (const feature of sourceData.labels?.features ?? []) {
@@ -2306,7 +2310,8 @@ function layoutLabels(): void {
       kept.add(id);
       const label = placeLabel(id, coords, [0, 0], {group: 'district-name', labelType: 'poi'});
       label.classList.add('map-label', 'map-label-poi', 'map-poi-caption', 'map-district-caption');
-      label.style.color = '#7b828a'; label.style.fontSize = `${size}px`; label.style.fontFamily = font;
+      label.style.color = contextMode === 'transit' ? '#a1a7ab' : '#7b828a';
+      label.style.fontSize = `${size}px`; label.style.fontFamily = font;
       label.textContent = text;
       applyLabelHalo(label, 'poi');
     }
